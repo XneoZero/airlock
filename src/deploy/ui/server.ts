@@ -9,9 +9,9 @@ import { execFile } from 'node:child_process';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { packRelease } from '../local.ts';
+import { loadProfileTable, packRelease } from '../local.ts';
 import { DeployError } from '../errors.ts';
 import { createDeployClient, type DeployClient } from '../client.ts';
 import type { DeployProfile, DeployServer } from '../contracts.ts';
@@ -45,6 +45,10 @@ export interface UiOptions {
   readonly airlockRoot?: string;
   /** 实际生效的档案文件（真实路径才会传），提示词里要写它而不是猜一个位置。 */
   readonly profilesFile?: string;
+  /** 启动时传入的 --profiles；重读档案要用同一个来源。 */
+  readonly profilesPath?: string;
+  /** 档案里没写 app 时的兜底值（启动参数 --app）。 */
+  readonly fallbackApp?: string;
   readonly onProjectsChanged?: (projects: UiProject[]) => void;
 }
 
@@ -261,8 +265,45 @@ async function gitStatus(workspace: string): Promise<{ clean: boolean; dirty: nu
 export async function startUiServer(options: UiOptions): Promise<UiServer> {
   const { token } = options;
   let projects: UiProject[] = [...options.projects];
+  let servers: Record<string, DeployServer> = { ...(options.servers ?? {}) };
   const clients = new Map<string, DeployClient>();
   let releaseInFlight = false;
+  let reloadError = '';
+
+  /**
+   * 重读档案：用户很可能在控制台开着的时候改档案加服务器/项目。
+   * 读失败就保留启动时那份（别把整个控制台搞挂），把错误挂出来给前端提示。
+   */
+  function reloadTable(): void {
+    let table;
+    try {
+      const override = options.profilesPath;
+      table = loadProfileTable(override === undefined || override === '' ? undefined : override);
+    } catch (error) {
+      reloadError = error instanceof Error ? error.message : String(error);
+      return;
+    }
+    reloadError = '';
+    const next: UiProject[] = [];
+    for (const [name, profile] of Object.entries(table.table.profiles)) {
+      const app = profile.app ?? options.fallbackApp;
+      if (app === undefined || app === '') continue;
+      next.push({
+        name,
+        app,
+        workspace: resolve(table.baseDir, profile.workspace ?? '.'),
+        profile,
+      });
+    }
+    if (next.length > 0) {
+      // 目录可能被删掉了，别留下打不开的项目。
+      projects = next.filter(item => existsSync(item.workspace));
+      if (projects.length === 0) projects = next;
+    }
+    servers = { ...table.table.servers };
+    // 客户端缓存按 host 复用，档案改了之后旧的连接对象可能指向已删除的服务器。
+    clients.clear();
+  }
 
   /**
    * 追加一个项目：写回档案文件，然后重建内存里的项目列表。
@@ -322,9 +363,9 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
   function serverProfile(project: UiProject, serverId: unknown): DeployProfile {
     const key = typeof serverId === 'string' ? serverId.trim() : '';
     if (key === '') return project.profile;
-    const server = options.servers?.[key];
+    const server = servers[key];
     if (server === undefined) {
-      const known = Object.keys(options.servers ?? {}).join(', ') || '（空）';
+      const known = Object.keys(servers).join(', ') || '（空）';
       throw new DeployError('INVALID_REQUEST', `未知服务器：${key}。已配置：${known}`);
     }
     return { ...server, app: project.app };
@@ -343,7 +384,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
   }
 
   function serverSummary() {
-    return Object.entries(options.servers ?? {}).map(([id, server]) => ({
+    return Object.entries(servers).map(([id, server]) => ({
       id,
       host: server.host,
       user: server.user ?? null,
@@ -383,6 +424,8 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
       projects: projectSummary(),
       servers: serverSummary(),
       selectedServer: typeof serverId === 'string' ? serverId : '',
+      profilesFile: options.profilesFile ?? '',
+      reloadError,
       app: project.app,
       workspace: project.workspace,
       candidates: listCandidates(project.workspace),
@@ -482,6 +525,9 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
         json(response, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: 'token 不正确' } });
         return;
       }
+
+      // 每个 API 请求前重读档案：用户常开着控制台改 servers/profiles，不重读就看不到。
+      reloadTable();
 
       if (request.method === 'GET' && url.pathname === '/api/overview') {
         await handleOverview(resolveProject(url.searchParams.get('project')), url.searchParams.get('server'), response);

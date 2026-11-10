@@ -376,6 +376,9 @@ export function renderPage(options: PageOptions): string {
         APP = d.app || '';
         if (d.projects && d.projects.length) rebuildProjectSelect(d.projects);
         rebuildServerSelect(d.servers || [], currentServer);
+        if (d.reloadError){
+          toast('档案读取失败，仍在用启动时那份：' + d.reloadError, 'err');
+        }
         q('app-name').textContent = d.app;
         q('server').textContent = d.server && d.server.serverId ? d.server.serverId : '不可达';
         q('root').textContent = d.server && d.server.root ? d.server.root : '—';
@@ -445,32 +448,71 @@ export function renderPage(options: PageOptions): string {
   function buildJoinPrompt(host, platform){
     var target = host && host.trim() ? host.trim() : '<目标机器地址>';
     var os = platform === 'linux' ? 'Linux' : 'Windows';
-    var provision = platform === 'linux'
-      ? 'scripts/provision-windows.ps1 的 Linux 对应流程（没有现成脚本就照它的逻辑做）'
-      : 'scripts/provision-windows.ps1';
     var profileWhere = PROFILES_FILE !== ''
       ? PROFILES_FILE
       : '档案文件 deploy-profiles.json（可能由 AIRLOCK_DEPLOY_PROFILES_FILE 环境变量指定）';
-    return [
+    var lines = [
       '帮我把一台新机器接成 Airlock 的部署目标。',
       '',
       '【工具】Airlock 装在本机 ' + AIRLOCK_ROOT + '（Windows）',
       '【档案】' + profileWhere,
       '【目标】' + target + '（' + os + '）',
       '',
-      '按顺序做：',
-      '1. 确认目标机器能 SSH 登录（用现有账号或新建，密钥要专用）。',
-      '2. 在目标机器装 Node ≥ 24：airlock-deployer 直接跑 .ts，靠内置类型剥离，不需要构建步骤。',
-      '3. 建部署账号（默认 ag-ssh）和专用密钥。不要复用日常账号——SSH 和 RDP 用同一个账号会互相挤掉会话。',
-      '4. 在 ' + AIRLOCK_ROOT + ' 下跑 ' + provision + '：创建账号与组、装公钥、配 sshd 的 Match User + ForceCommand，只允许走部署通道。',
-      '5. 把 ' + AIRLOCK_ROOT + ' 里的 bin/ 和 src/ 拷到目标机器，写 config/deployer.json（应用 id、root、start/stop、健康检查）。root 默认放管理员桌面。',
-      '6. 在上面的档案里加一个 servers 条目，然后跑',
-      '   node "' + AIRLOCK_ROOT + '\\\\bin\\\\airlock-deploy.mjs" status --app <应用>',
-      '   确认能连通、能看到 root。',
+      '按顺序做，每一步都要验证结果，不要假设上一步已经生效：',
+      ''
+    ];
+
+    if (os === 'Windows') {
+      lines = lines.concat([
+        '1. 先测目标机 22 端口，区分两种失败：',
+        '   · 连接超时 = 包被丢掉（云安全组或防火墙），22 没放行要我本人去云控制台开，agent 开不了；',
+        '   · 连接拒绝 = 端口通了但 sshd 没在监听。',
+        '   只有 3389/21 能通、22 超时，是最常见的第一道坎。',
+        '2. 装 Node ≥ 24，记下 node.exe 的绝对路径，后面 deployer 命令要用。',
+        '3. 建部署账号（默认 ag-ssh）+ 专用密钥。这一步最容易翻车，三个必查项：',
+        '   a. 公钥必须写进「真实的 profile 目录」——Windows 上常常是 C:\\\\Users\\\\ag-ssh.<机器名>，',
+        '      不是 C:\\\\Users\\\\ag-ssh。用注册表 ProfileList 查实际目录，别猜。',
+        '   b. sshd_config 里如果有 AllowGroups / AllowUsers，新账号必须在名单里，',
+        '      否则密钥再对也会被拒，而日志只会说 publickey denied。',
+        '   c. authorized_keys 必须是 ASCII 或 UTF-8 无 BOM，写文件时显式指定编码。',
+        '4. 配 sshd 的 Match User + ForceCommand（只允许走部署通道）。',
+        '   改之前先挂一个 10 分钟自动回滚的计划任务，改完立刻测一次能登进来再继续。',
+        '5. 把 ' + AIRLOCK_ROOT + ' 里的 bin/ 和 src/ 拷到目标机，写 config/deployer.json',
+        '   （应用 id、root、start/stop、健康检查）。root 默认放管理员桌面。',
+        '6. 在档案里加一个 servers 条目，然后跑',
+        '   node "' + AIRLOCK_ROOT + '\\\\bin\\\\airlock-deploy.mjs" status --app <应用>',
+        '   确认能连通、能看到 root。',
+        '',
+        '已知的坑（上次接机器时真遇到过，别重复）：',
+        '· Windows 防火墙规则 OpenSSH-Server-In-TCP 可能是 Disabled，而且只覆盖 Private 配置文件。',
+        '  表现就是「服务 Running、22 依然不通」。要启用它并覆盖实际使用的配置文件（Domain/Public）。',
+        '· 改 authorized_keys 的 ACL 时不要用 /inheritance:r 一刀切，那会把 Administrators 也锁在外面。',
+        '  保留 SYSTEM 和 Administrators 的访问权。',
+        '· 不要复用日常或 RDP 账号做部署账号：同一账号 SSH 与 RDP 会互踢会话。'
+      ]);
+    } else {
+      lines = lines.concat([
+        '1. 先测目标机 22 端口。连接超时要区分是云安全组丢包还是 sshd 没起。',
+        '2. 装 Node ≥ 24，记下 node 的绝对路径。',
+        '3. 建部署账号（默认 ag-ssh）+ 专用密钥，写进 ~/.ssh/authorized_keys，权限 600、目录 700。',
+        '4. 配 sshd 的 Match User + ForceCommand（只允许走部署通道）。',
+        '   改之前先挂一个 10 分钟自动回滚的 cron/systemd timer，改完立刻测一次能登进来再继续。',
+        '5. 把 ' + AIRLOCK_ROOT + ' 里的 bin/ 和 src/ 拷到目标机，写 config/deployer.json',
+        '   （应用 id、root、start/stop、健康检查）。root 按目标机的惯例选，别放在会被清理的目录。',
+        '6. 在档案里加一个 servers 条目，然后跑',
+        '   node "' + AIRLOCK_ROOT + '\\\\bin\\\\airlock-deploy.mjs" status --app <应用>',
+        '   确认能连通、能看到 root。',
+        '',
+        '已知的坑：',
+        '· 不要复用日常账号做部署账号；SSH 的 ForceCommand 会影响这个账号的所有登录。',
+        '· deployer 是裸进程托管时，systemd 的 KillMode 若为 control-group，ssh 断开可能连带收掉子进程。'
+      ]);
+    }
+
+    return lines.concat([
       '',
-      '注意：改 sshd 前先挂 10 分钟自动回滚任务，别把我锁在外面。',
-      '做完告诉我：服务器名字、应用 id、落点路径，以及要开哪些端口。'
-    ].join('\\n');
+      '做完告诉我：服务器名字、应用 id、落点路径、要开哪些端口。'
+    ]).join('\\n');
   }
 
   function refreshJoinPrompt(){

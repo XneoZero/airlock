@@ -122,6 +122,8 @@ try {
     port: options.port,
     airlockRoot: AIRLOCK_ROOT,
     ...(profileFile === undefined ? {} : { profilesFile: profileFile }),
+    ...(options.profiles === undefined || options.profiles === '' ? {} : { profilesPath: options.profiles }),
+    ...(options.app === '' ? {} : { fallbackApp: options.app }),
     ...(profileFile === undefined ? {} : { profileFile }),
     ...(baseProfile === undefined ? {} : { baseProfile }),
   });
