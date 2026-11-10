@@ -126,7 +126,8 @@ node bin/airlock.mjs mcp          # 或 AIRLOCK_PROFILE=dev node bin/airlock-mcp
 ## 发布通道：本地构建 → 发到服务器 → 起不来就回滚
 
 除了「改服务器上的文件」，Airlock 还有第二个通道：把本地已经构建好的目录推上服务器，
-按版本目录 + `current` 链接切换，起不来自动回退。完整说明见 [docs/DEPLOY.md](docs/DEPLOY.md)。
+按版本目录 + `current` 链接切换，起不来自动回退。完整说明见 [docs/DEPLOY.md](docs/DEPLOY.md)，
+从零接入一台新服务器照 [docs/ONBOARDING.md](docs/ONBOARDING.md) 做。
 
 ```bash
 npm run build && npm test                                        # 本地自己验证
