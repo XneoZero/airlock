@@ -506,6 +506,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
           defaultProject: options.defaultProject,
           airlockRoot: options.airlockRoot ?? process.cwd(),
           profilesFile: options.profilesFile ?? '',
+          platform: process.platform,
         });
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         response.end(page);

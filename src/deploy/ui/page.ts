@@ -19,6 +19,8 @@ export interface PageOptions {
   readonly airlockRoot: string;
   /** 实际生效的档案文件绝对路径；档案来自环境变量时为空。 */
   readonly profilesFile: string;
+  /** 运行控制台的操作系统（process.platform），提示词要按它区分 Windows / macOS / Linux。 */
+  readonly platform: string;
 }
 
 export function renderPage(options: PageOptions): string {
@@ -278,6 +280,10 @@ export function renderPage(options: PageOptions): string {
   var currentServer = '';
   var AIRLOCK_ROOT = ${JSON.stringify(options.airlockRoot)};
   var PROFILES_FILE = ${JSON.stringify(options.profilesFile)};
+  var PLATFORM = ${JSON.stringify(options.platform)};
+  // 路径分隔符按平台来：提示词里的命令要能直接在用户自己的机器上跑。
+  var SEP = PLATFORM === 'win32' ? String.fromCharCode(92) : '/';
+  var HOST_OS = PLATFORM === 'win32' ? 'Windows' : (PLATFORM === 'darwin' ? 'macOS' : 'Linux');
   var APP = '';
   var busy = false;
   var overviewData = null;
@@ -454,7 +460,7 @@ export function renderPage(options: PageOptions): string {
     var lines = [
       '帮我把一台新机器接成 Airlock 的部署目标。',
       '',
-      '【工具】Airlock 装在本机 ' + AIRLOCK_ROOT + '（Windows）',
+      '【工具】Airlock 装在本机 ' + AIRLOCK_ROOT + '（' + HOST_OS + '）',
       '【档案】' + profileWhere,
       '【目标】' + target + '（' + os + '）',
       '',
@@ -470,8 +476,8 @@ export function renderPage(options: PageOptions): string {
         '   只有 3389/21 能通、22 超时，是最常见的第一道坎。',
         '2. 装 Node ≥ 24，记下 node.exe 的绝对路径，后面 deployer 命令要用。',
         '3. 建部署账号（默认 ag-ssh）+ 专用密钥。这一步最容易翻车，三个必查项：',
-        '   a. 公钥必须写进「真实的 profile 目录」——Windows 上常常是 C:\\\\Users\\\\ag-ssh.<机器名>，',
-        '      不是 C:\\\\Users\\\\ag-ssh。用注册表 ProfileList 查实际目录，别猜。',
+        '   a. 公钥必须写进「真实的 profile 目录」——Windows 上常常是 C:' + SEP + 'Users' + SEP + 'ag-ssh.<机器名>，',
+        '      不是 C:' + SEP + 'Users' + SEP + 'ag-ssh。用注册表 ProfileList 查实际目录，别猜。',
         '   b. sshd_config 里如果有 AllowGroups / AllowUsers，新账号必须在名单里，',
         '      否则密钥再对也会被拒，而日志只会说 publickey denied。',
         '   c. authorized_keys 必须是 ASCII 或 UTF-8 无 BOM，写文件时显式指定编码。',
@@ -480,7 +486,7 @@ export function renderPage(options: PageOptions): string {
         '5. 把 ' + AIRLOCK_ROOT + ' 里的 bin/ 和 src/ 拷到目标机，写 config/deployer.json',
         '   （应用 id、root、start/stop、健康检查）。root 默认放管理员桌面。',
         '6. 在档案里加一个 servers 条目，然后跑',
-        '   node "' + AIRLOCK_ROOT + '\\\\bin\\\\airlock-deploy.mjs" status --app <应用>',
+        '   node "' + AIRLOCK_ROOT + SEP + 'bin' + SEP + 'airlock-deploy.mjs" status --app <应用>',
         '   确认能连通、能看到 root。',
         '',
         '已知的坑（上次接机器时真遇到过，别重复）：',
@@ -500,7 +506,7 @@ export function renderPage(options: PageOptions): string {
         '5. 把 ' + AIRLOCK_ROOT + ' 里的 bin/ 和 src/ 拷到目标机，写 config/deployer.json',
         '   （应用 id、root、start/stop、健康检查）。root 按目标机的惯例选，别放在会被清理的目录。',
         '6. 在档案里加一个 servers 条目，然后跑',
-        '   node "' + AIRLOCK_ROOT + '\\\\bin\\\\airlock-deploy.mjs" status --app <应用>',
+        '   node "' + AIRLOCK_ROOT + SEP + 'bin' + SEP + 'airlock-deploy.mjs" status --app <应用>',
         '   确认能连通、能看到 root。',
         '',
         '已知的坑：',

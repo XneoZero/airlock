@@ -75,7 +75,7 @@ C:\nodejs\npm.cmd --version
 本机打包（排除依赖和测试）：
 
 ```powershell
-tar -czf "$env:TEMP\airlock-src.tar.gz" -C C:\Users\<user>\Desktop\Airlock `
+tar -czf "$env:TEMP\airlock-src.tar.gz" -C C:\path\to\Airlock `
     --exclude=node_modules --exclude=.git --exclude=config --exclude=test .
 scp "$env:TEMP\airlock-src.tar.gz" user@host:"C:/Windows/Temp/airlock-src.tar.gz"
 ```

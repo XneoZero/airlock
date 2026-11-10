@@ -180,7 +180,7 @@ Add-LocalGroupMember -Group 'Administrators' -Member 'ag-ssh'
 
 ```json
 {"v":1,"id":1,"op":"list-dir","app":"web"}
-{"v":1,"id":2,"op":"set-root","app":"web","params":{"root":"C:/Users/ag-ssh.<machine>/Desktop/web"}}
+{"v":1,"id":2,"op":"set-root","app":"web","params":{"root":"C:/Users/<user>/Desktop/web"}}
 ```
 
 语义上有三条硬规则：
@@ -389,7 +389,7 @@ Airlock 是独立工具，不是要复制进每个项目的库。三种用法，
 ### 1. 全局安装（多项目，推荐）
 
 ```powershell
-cd C:\Users\<user>\Desktop\Airlock
+cd C:\path\to\Airlock
 npm link                      # 把 airlock-deploy 链接成全局命令
 
 # 档案只放一份，所有项目共用
@@ -412,7 +412,7 @@ airlock-deploy rollback --app web
 
 ```powershell
 cd D:\work\my-project
-npm install --save-dev file:C:\Users\<user>\Desktop\Airlock
+npm install --save-dev file:C:\path\to\Airlock
 ```
 
 `package.json` 加脚本，团队成员 `npm install` 后直接用：
@@ -509,7 +509,7 @@ node bin/airlock-deploy.mjs logs --app web --lines 50
   "mcpServers": {
     "airlock-deploy": {
       "command": "node",
-      "args": ["C:/Users/<user>/Desktop/Airlock/bin/airlock-deploy-mcp.mjs"],
+      "args": ["C:/path/to/Airlock/bin/airlock-deploy-mcp.mjs"],
       "env": { "AIRLOCK_DEPLOY_PROFILE": "prod" }
     }
   }
