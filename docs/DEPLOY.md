@@ -28,9 +28,20 @@
 1. 建本地用户（随机密码、永不过期、只能 key 登录），**不加进 Administrators**
 2. 建本地组 `airlock-deploy`，把账号加进去
 3. 建 `C:\airlock\{bin,config,apps}`，给这个组「修改」权限（不是完全控制，避免自己改 ACL）
-4. 把公钥写进 `C:\Users\ag-ssh\.ssh\authorized_keys` 并收紧 ACL
-5. 往 `sshd_config` 追加 `Match User ag-ssh` + `ForceCommand C:\airlock\bin\deploy.cmd`，
-   禁用 PTY/转发；**先备份、用 `sshd -t` 校验、校验失败自动还原**
+4. 把公钥写进**真实 profile 目录**下的 `.ssh/authorized_keys`（见下方两条坑）
+5. 往 `sshd_config` 追加 `Match User <账号>`：`AuthorizedKeysFile` 显式指向该文件 +
+   `ForceCommand C:\airlock\bin\deploy.cmd`，禁用 PTY/转发；**先备份、用 `sshd -t` 校验、
+   失败自动还原**，并在重启前挂一个 10 分钟自动回滚任务
+
+> **坑一：Windows 本地用户的 profile 目录是 `C:\Users\<用户名>.<机器名>`，不是 `C:\Users\<用户名>`。**
+> 把 key 写到后者，sshd 永远找不到，表现就是「明明加了 key 还是 Permission denied」。
+> 脚本用 `ProfileList` 注册表项查真实路径；账号从没登录过、注册表里没有项时会明确报错，
+> 让你先登录一次再跑。
+
+> **坑二：`sshd_config` 顶层的 `AuthorizedKeysFile` 如果被改成了共享的
+> `__PROGRAMDATA__/ssh/administrators_authorized_keys`，所有账号都读同一个文件，
+> 各自的 `.ssh/authorized_keys` 被完全忽略。** 脚本用 `Match User` 里显式声明
+> `AuthorizedKeysFile` 绕开全局设置，不依赖它的值。
 
 `deploy.cmd` 是个两行包装：调用 `node C:\airlock\bin\airlock-deployer.mjs --config C:\airlock\config\deployer.json`。
 Windows 的 `ForceCommand` 会交给 `cmd.exe` 解析，路径里有空格（`C:\Program Files\nodejs`）时
@@ -44,6 +55,72 @@ Linux 上这一步等价于在 `~/.ssh/authorized_keys` 那行前面加前缀，
 ```
 restrict,command="/usr/bin/node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json" ssh-ed25519 AAAA...
 ```
+
+## SSH 加固（生产必做）
+
+三个动作，按顺序做。**每一步都可能把自己锁在门外，所以先确认有 RDP/控制台兜底。**
+
+### 1. 一人一钥
+
+共用 `administrators_authorized_keys` 的问题：一把 key 丢了，所有账号一起沦陷，而且无法单独撤销。
+
+```powershell
+# 每个账号一把独立 key，写进各自的 profile 目录
+foreach ($u in 'dev-ssh','deploy-ssh') {
+    $profile = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*' |
+        Where-Object { $_.ProfileImagePath -match "\\$u(\.[^.\\]+)?$" }).ProfileImagePath
+    $dir = Join-Path $profile '.ssh'
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    # ... 写入对应公钥 ...
+    $acl = Get-Acl (Join-Path $dir 'authorized_keys')
+    $acl.SetOwner([System.Security.Principal.NTAccount]"$env:COMPUTERNAME\$u")
+    Set-Acl (Join-Path $dir 'authorized_keys') $acl
+}
+```
+
+`sshd_config` 顶层改成 per-user：
+
+```
+AuthorizedKeysFile .ssh/authorized_keys
+```
+
+然后验证**每个账号各用各的 key**——不仅验证「能连」，还要验证「拿 A 的 key 连 B 应该失败」。
+
+### 2. 来源 IP 白名单
+
+Windows 上建议用防火墙而不是 `AllowUsers user@ip`，因为改错了还能从 RDP 救：
+
+```powershell
+$allowed = '203.0.113.10'
+New-NetFirewallRule -DisplayName 'Airlock SSH allowlist' -Direction Inbound -Protocol TCP `
+    -LocalPort 22 -RemoteAddress $allowed -Action Allow -Profile Any
+Get-NetFirewallRule -DisplayName '*SSH*' | Disable-NetFirewallRule   # 关掉旧的 Any 规则
+```
+
+**顺序很重要**：先建限制规则，确认生效，再禁用宽松规则。反过来的话中间有个「谁都进不来」的窗口。
+
+IP 会变（家宽、手机热点）。换网络前进不去时，从 RDP 执行：
+
+```powershell
+Set-NetFirewallRule -DisplayName 'Airlock SSH allowlist' -RemoteAddress '203.0.113.10','198.51.100.7'
+```
+
+### 3. 改 sshd 前先挂回滚
+
+```powershell
+$cfg = 'C:\ProgramData\ssh\sshd_config'
+$bak = "$cfg.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+Copy-Item $cfg $bak -Force
+# ... 改配置、sshd -t ...
+$rollback = "Copy-Item '$bak' '$cfg' -Force; Restart-Service sshd -Force"
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -Command `"$rollback`""
+Register-ScheduledTask -TaskName 'airlock-sshd-rollback' `
+    -Action $action -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(10)) `
+    -User 'SYSTEM' -RunLevel Highest -Force
+Restart-Service sshd
+```
+
+验证通过后 **一定记得删掉** `airlock-sshd-rollback`，否则 10 分钟后它会把你刚改好的配置还原回去。
 
 ## 服务器目录布局
 

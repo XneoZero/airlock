@@ -145,14 +145,24 @@ if (-not $DryRun) {
 }
 
 # --- 4. authorized key ------------------------------------------------------
-$keyBody = ($trimmed -split '\s+')[1]
-if ($isAdminAccount) {
-    # Administrative accounts are matched by a Match Group block in the default
-    # sshd_config, so the per-user file is ignored entirely.
-    $authFile = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
-} else {
-    $authFile = Join-Path "C:\Users\$AccountName" '.ssh\authorized_keys'
+# Windows local accounts live in C:\Users\<name>.<machine>, NOT C:\Users\<name>.
+# sshd resolves AuthorizedKeysFile against the real profile directory, so writing
+# to the "obvious" path silently does nothing. Always look the profile up first.
+function Get-ProfileDirectory([string]$Name) {
+    $pattern = '\\' + [regex]::Escape($Name) + '(\.[^.\\]+)?$'
+    $entry = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProfileImagePath -match $pattern } |
+        Select-Object -First 1
+    if ($null -eq $entry) { return $null }
+    return $entry.ProfileImagePath
 }
+
+$keyBody = ($trimmed -split '\s+')[1]
+$profileDir = if ($DryRun) { "C:\Users\$AccountName.<machine>" } else { Get-ProfileDirectory $AccountName }
+if ($null -eq $profileDir) {
+    throw "No profile directory for $AccountName yet. Log in as that account once (console/RDP), then re-run."
+}
+$authFile = Join-Path $profileDir '.ssh\authorized_keys'
 Write-Step "authorize key in $authFile"
 if (-not $DryRun) {
     $authDir = Split-Path -Parent $authFile
@@ -164,11 +174,20 @@ if (-not $DryRun) {
     if (-not $alreadyThere) {
         Add-Content -Path $authFile -Value $trimmed -Encoding ASCII
     }
-    if ($isAdminAccount) {
-        & icacls $authFile /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' /Q | Out-Null
-    } else {
-        & icacls $authFile /inheritance:r /grant "${AccountName}:F" /grant 'Administrators:F' /grant 'SYSTEM:F' /Q | Out-Null
+    # Per-user file: owner must be the account itself, and keep it readable by
+    # SYSTEM (sshd) and Administrators. Do NOT strip inheritance wholesale here;
+    # a failed /grant would leave sshd unable to read the file.
+    try {
+        $acl = Get-Acl -Path $authFile
+        $acl.SetOwner([System.Security.Principal.NTAccount]"$env:COMPUTERNAME\$AccountName")
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            "$env:COMPUTERNAME\$AccountName", 'FullControl', 'Allow')
+        $acl.SetAccessRule($rule)
+        Set-Acl -Path $authFile -AclObject $acl
+    } catch {
+        Write-Step "WARNING: could not set owner/ACL on $authFile : $($_.Exception.Message)"
     }
+    Write-Step "authorized_keys owner: $((Get-Acl $authFile).Owner)"
 }
 
 # --- 5. deploy launcher -----------------------------------------------------
@@ -194,9 +213,14 @@ if (-not $SkipSshd) {
     Write-Step "backup sshd_config -> $backup"
     if (-not $DryRun) { Copy-Item -Path $SshdConfig -Destination $backup -Force }
 
+    # Pin this account to its own authorized_keys explicitly. The global
+    # AuthorizedKeysFile is often pointed at the shared administrators file on
+    # Windows servers, which silently ignores per-user keys.
+    $keyPathForSshd = ($authFile -replace '\\', '/')
     $block = @"
 $Marker
 Match User $AccountName
+    AuthorizedKeysFile "$keyPathForSshd"
     ForceCommand "$launcher"
     PermitTTY no
     AllowTcpForwarding no
@@ -225,6 +249,19 @@ Match User $AccountName
             throw "sshd_config validation failed; restored $backup. Nothing was reloaded."
         }
         Write-Step 'sshd_config valid; restarting sshd (existing SSH sessions will drop)'
+        # Arm a 10-minute rollback before touching the live service: if the new
+        # config locks everyone out, this puts the previous file back by itself.
+        $rollbackCmd = "Copy-Item '$backup' '$SshdConfig' -Force; Restart-Service sshd -Force"
+        try {
+            $action = New-ScheduledTaskAction -Execute 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
+                -Argument "-NoProfile -Command `"$rollbackCmd`""
+            $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(10)
+            Register-ScheduledTask -TaskName 'airlock-sshd-rollback' -Action $action -Trigger $trigger `
+                -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+            Write-Step 'rollback guard armed for 10 minutes (airlock-sshd-rollback)'
+        } catch {
+            Write-Step "WARNING: could not arm rollback guard: $($_.Exception.Message)"
+        }
         Restart-Service sshd -Force
     }
 }
