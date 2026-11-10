@@ -8,7 +8,7 @@
 import { execFile } from 'node:child_process';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { packRelease } from '../local.ts';
@@ -115,12 +115,13 @@ function listCandidates(workspace: string): Candidate[] {
 }
 
 /**
- * 弹 Windows 原生「选择文件夹」对话框。浏览器拿不到绝对路径，只能让服务端弹。
- * 需要 STA 线程，所以带 -STA；用户点取消时返回 null。
+ * 弹 Windows 原生「选择文件夹」对话框。
+ * 说明：DSH 这类后台 shell 环境通常没有交互式窗口站，原生对话框弹不出来，
+ * 所以这个接口只在对端有桌面时可用；前端会先试它，失败就退回浏览器的文件夹选择器。
  */
 async function pickFolder(): Promise<string | null> {
   if (process.platform !== 'win32') {
-    throw new DeployError('INVALID_REQUEST', '原生文件夹对话框目前只支持 Windows，请手动输入路径');
+    throw new DeployError('INVALID_REQUEST', '原生文件夹对话框目前只支持 Windows');
   }
   const script = [
     'Add-Type -AssemblyName System.Windows.Forms | Out-Null',
@@ -133,36 +134,55 @@ async function pickFolder(): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], {
       windowsHide: true,
-      timeout: 180_000,
+      timeout: 60_000,
     });
     const picked = stdout.trim();
-    return picked === '' ? null : picked;
+    if (picked === '') {
+      throw new DeployError('INTERNAL', '没有拿到路径：这个环境的 PowerShell 无法显示窗口（后台会话），请用浏览器选择或手动输入');
+    }
+    return picked;
   } catch (error) {
+    if (error instanceof DeployError) throw error;
     throw new DeployError('INTERNAL', `打开文件夹对话框失败：${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-/** 拖拽只能拿到文件夹名，就在用户常用目录里找同名文件夹。只扫两层，避免拖慢。 */
+/**
+ * 拖拽/浏览器选择只能拿到文件夹名，就在常用位置找同名目录。
+ * 范围：用户常用子目录、用户目录本身、系统临时目录、各盘符根与两层子目录。
+ * 只扫两层，避免把「选择文件夹」拖成磁盘遍历。
+ */
 const SEARCH_ROOTS = ['Desktop', 'Documents', 'Downloads', 'Projects', 'project', 'work', 'code', 'src', 'dev', 'repos'];
-const SEARCH_DRIVES = ['D:', 'E:', 'F:'];
+const SEARCH_DRIVES = ['C:', 'D:', 'E:', 'F:'];
 
 function findFoldersByName(name: string): string[] {
   const wanted = name.toLowerCase();
   const roots: string[] = [];
-  for (const sub of SEARCH_ROOTS) {
-    const abs = join(homedir(), sub);
-    if (existsSync(abs)) roots.push(abs);
-  }
+  const seenRoot = new Set<string>();
+  const push = (dir: string): void => {
+    if (seenRoot.has(dir) || !existsSync(dir)) return;
+    seenRoot.add(dir);
+    roots.push(dir);
+  };
+
+  for (const sub of SEARCH_ROOTS) push(join(homedir(), sub));
+  push(homedir());
+  push(tmpdir());
   for (const drive of SEARCH_DRIVES) {
-    if (existsSync(drive)) {
-      roots.push(drive);
-      roots.push(join(drive, 'work'));
-      roots.push(join(drive, 'Projects'));
-    }
+    push(`${drive}\\`);
+    for (const sub of ['work', 'Projects', 'code', 'dev']) push(join(`${drive}\\`, sub));
   }
+
   const found: string[] = [];
   const seen = new Set<string>();
+  const record = (abs: string): void => {
+    if (found.length >= 8 || seen.has(abs)) return;
+    found.push(abs);
+    seen.add(abs);
+  };
+
   for (const root of roots) {
+    if (found.length >= 8) break;
     let entries: string[] = [];
     try {
       entries = readdirSync(root);
@@ -172,13 +192,18 @@ function findFoldersByName(name: string): string[] {
     for (const entry of entries) {
       if (found.length >= 8) break;
       const abs = join(root, entry);
-      if (!existsSync(abs) || !statSync(abs).isDirectory()) continue;
-      if (entry.toLowerCase() === wanted && !seen.has(abs)) {
-        found.push(abs);
-        seen.add(abs);
+      let isDir = false;
+      try {
+        isDir = statSync(abs).isDirectory();
+      } catch {
         continue;
       }
-      // 再往下一层找（很多项目放在 D:\work\<项目> 这种位置）
+      if (!isDir) continue;
+      if (entry.toLowerCase() === wanted) {
+        record(abs);
+        continue;
+      }
+      // 再往下一层找（项目常放在 D:\work\<项目> 这种位置）
       let children: string[] = [];
       try {
         children = readdirSync(abs);
@@ -187,16 +212,13 @@ function findFoldersByName(name: string): string[] {
       }
       for (const child of children) {
         if (found.length >= 8) break;
-        const childAbs = join(abs, child);
         if (child.toLowerCase() !== wanted) continue;
+        const childAbs = join(abs, child);
         try {
-          if (!statSync(childAbs).isDirectory()) continue;
+          if (statSync(childAbs).isDirectory()) record(childAbs);
         } catch {
-          continue;
+          /* 跳过不可读的 */
         }
-        if (seen.has(childAbs)) continue;
-        found.push(childAbs);
-        seen.add(childAbs);
       }
     }
   }

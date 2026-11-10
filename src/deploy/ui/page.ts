@@ -172,9 +172,10 @@ export function renderPage(options: PageOptions): string {
       <h3>添加项目</h3>
       <label>项目目录</label>
       <div style="display:flex;gap:8px">
-        <input id="add-path" spellcheck="false" placeholder="把文件夹拖到窗口任意位置，或点浏览" style="flex:1">
-        <button type="button" id="add-browse">浏览…</button>
+        <input id="add-path" spellcheck="false" placeholder="把文件夹拖到窗口任意位置，或点「选择文件夹」" style="flex:1">
+        <button type="button" id="add-browse">选择文件夹…</button>
       </div>
+      <input type="file" id="add-picker" webkitdirectory directory multiple style="display:none">
       <div class="hint" id="add-path-hint">浏览器拿不到拖拽的绝对路径，拖进来后会自动在常用目录里找同名文件夹</div>
       <label>项目名</label>
       <input id="add-name" placeholder="例如 my-web" spellcheck="false">
@@ -374,21 +375,49 @@ export function renderPage(options: PageOptions): string {
     q('add-path').focus();
   });
 
+  /**
+   * 浏览器只能给出文件夹名，让服务端去常用位置找真实路径。
+   * 找不到就把弹窗留着，让用户手动粘贴完整路径。
+   */
+  function locateFolder(folderName){
+    q('add-dlg').showModal();
+    if (!q('add-name').value) q('add-name').value = guessName(folderName);
+    toast('正在查找 ' + folderName + ' 的位置…', '');
+    api('/api/find-folder', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: folderName })
+    }).then(function(res){
+      if (res.status === 200 && res.body.ok && res.body.paths && res.body.paths.length){
+        var found = res.body.paths[0];
+        q('add-path').value = found;
+        q('add-path-hint').textContent = res.body.paths.length > 1
+          ? '找到 ' + res.body.paths.length + ' 个同名文件夹，已填第一个：' + found + '（不对就手改）'
+          : '已定位到 ' + found;
+        toast('找到了 ' + folderName, 'ok');
+      } else {
+        q('add-path-hint').textContent = '没能自动定位「' + folderName + '」，请手动粘贴完整路径';
+        toast('没找到完整路径，请手动填写', 'err');
+      }
+    }).catch(function(error){ toast('查找失败：' + error.message, 'err'); });
+  }
+
   q('add-browse').addEventListener('click', function(){
-    var button = q('add-browse');
-    button.disabled = true;
-    button.textContent = '等待选择…';
-    api('/api/pick-folder', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
-      .then(function(res){
-        if (res.status === 200 && res.body.ok && res.body.path){
-          q('add-path').value = res.body.path;
-          if (!q('add-name').value) q('add-name').value = guessName(res.body.path);
-        } else if (res.status !== 200){
-          toast('打开对话框失败：' + (res.body.error ? res.body.error.message : '未知错误'), 'err');
-        }
-      })
-      .catch(function(error){ toast('打开对话框失败：' + error.message, 'err'); })
-      .finally(function(){ button.disabled = false; button.textContent = '浏览…'; });
+    var picker = q('add-picker');
+    if (typeof picker.showPicker === 'function') {
+      try { picker.showPicker(); return; } catch (e) { /* 退回普通 click */ }
+    }
+    picker.click();
+  });
+
+  q('add-picker').addEventListener('change', function(){
+    var files = this.files;
+    if (!files || !files.length) return;
+    var rel = files[0].webkitRelativePath || '';
+    var top = rel.split('/')[0] || '';
+    this.value = '';
+    if (!top){ toast('没识别到文件夹名，请手动填写路径', 'err'); return; }
+    locateFolder(top);
   });
 
   q('add-confirm').addEventListener('click', function(){
@@ -441,29 +470,8 @@ export function renderPage(options: PageOptions): string {
       var entry = items[0].webkitGetAsEntry ? items[0].webkitGetAsEntry() : null;
       name = entry ? entry.name : (items[0].getAsFile() ? items[0].getAsFile().name : '');
     }
-    if (!name){ toast('没识别到文件夹，试试点「浏览…」', 'err'); return; }
-    toast('正在查找 ' + name + ' 的位置…', '');
-    api('/api/find-folder', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: name })
-    }).then(function(res){
-      if (res.status === 200 && res.body.ok && res.body.paths && res.body.paths.length){
-        var found = res.body.paths[0];
-        q('add-dlg').showModal();
-        q('add-path').value = found;
-        q('add-name').value = q('add-name').value || guessName(found);
-        q('add-path-hint').textContent = res.body.paths.length > 1
-          ? '找到 ' + res.body.paths.length + ' 个同名文件夹，已填第一个：' + found + '（不对就点浏览换）'
-          : '已定位到 ' + found;
-        toast('找到了 ' + name, 'ok');
-      } else {
-        q('add-dlg').showModal();
-        q('add-name').value = q('add-name').value || guessName(name);
-        q('add-path-hint').textContent = '没能自动定位「' + name + '」，请点「浏览…」选择';
-        toast('没找到 ' + name + ' 的完整路径，请手动选择', 'err');
-      }
-    }).catch(function(error){ toast('查找失败：' + error.message, 'err'); });
+    if (!name){ toast('没识别到文件夹，试试点「选择文件夹」', 'err'); return; }
+    locateFolder(name);
   });
 
   function syncSourceMode(){
