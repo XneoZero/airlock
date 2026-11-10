@@ -9,6 +9,7 @@ import { appOf, type ArchiveReceiver, type DeployContext } from './context.ts';
 import { DeployError, isDeployError, messageOf } from './errors.ts';
 import { activateVersion, installVersion, rollbackVersion } from './operations.ts';
 import { listOfApp, logsOfApp, pruneReleases, statusAll, statusOfApp } from './inspect.ts';
+import { listServerDirectory, updateRoot } from './root.ts';
 
 function errorResponse(id: number, code: DeployError['code'] | 'INTERNAL', message: string, detail?: DeployError['detail']): DeployResponse {
   return {
@@ -42,6 +43,10 @@ async function route(ctx: DeployContext, request: DeployRequest, reader: Archive
       const app = appOf(ctx, request.app);
       return rollbackVersion(ctx, app, params);
     }
+    case 'list-dir':
+      return listServerDirectory(ctx, params.path);
+    case 'set-root':
+      return updateRoot(ctx, request.app, params.root);
     default: {
       const never: never = request.op;
       throw new DeployError('INVALID_REQUEST', `未知 op：${String(never)}`);

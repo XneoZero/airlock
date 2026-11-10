@@ -76,7 +76,7 @@ const config = {
 };
 if (Object.keys(config.apps).length === 0) die('配置里没有任何应用');
 
-const ctx = createContext(config);
+const ctx = createContext(config, undefined, resolve(options.configPath));
 log(`已连接：${config.serverId}（${ctx.kind}），应用 ${Object.keys(config.apps).join('、')}`);
 
 const reader = new StreamReader(process.stdin);

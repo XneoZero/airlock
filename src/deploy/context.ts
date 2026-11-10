@@ -14,10 +14,21 @@ export interface DeployContext {
   readonly config: DeployerConfig;
   readonly clock: () => number;
   readonly kind: 'linux' | 'windows';
+  /** 服务器侧配置文件的绝对路径。改落点要写回它；没传就拒绝改。 */
+  readonly configPath?: string;
 }
 
-export function createContext(config: DeployerConfig, clock: () => number = () => Date.now()): DeployContext {
-  return { config, clock, kind: config.kind ?? (process.platform === 'win32' ? 'windows' : 'linux') };
+export function createContext(
+  config: DeployerConfig,
+  clock: () => number = () => Date.now(),
+  configPath?: string,
+): DeployContext {
+  return {
+    config,
+    clock,
+    kind: config.kind ?? (process.platform === 'win32' ? 'windows' : 'linux'),
+    ...(configPath === undefined ? {} : { configPath }),
+  };
 }
 
 export function appIds(ctx: DeployContext): string[] {

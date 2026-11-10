@@ -165,6 +165,39 @@ Add-LocalGroupMember -Group 'Administrators' -Member 'ag-ssh'
 `current` 是唯一被启动命令引用的路径，所以 `start` 的 `cwd` 写 `current` 就行，
 不用改配置就能换版本。
 
+## 改发布落点
+
+落点就是服务器配置里每个应用的 `root`。它决定 `releases/`、`backups/`、`current`
+放在哪，也决定部署账号有权往哪写——所以它只认服务器配置，不接受客户端在请求里
+临时指定（否则拿到 token 的人就能让服务器往任意目录写文件）。
+
+改它有两个入口：
+
+**控制台（推荐）**：头部「落点」后面那个「改」按钮 → 弹出服务器目录浏览器 →
+默认停在部署账号的桌面 → 选好后点「用这个目录」。
+
+**协议层**：两个 op，`list-dir` 和 `set-root`，控制台调的就是它们。
+
+```json
+{"v":1,"id":1,"op":"list-dir","app":"web"}
+{"v":1,"id":2,"op":"set-root","app":"web","params":{"root":"C:/Users/ag-ssh.<machine>/Desktop/web"}}
+```
+
+语义上有三条硬规则：
+
+1. **只改 `root`**，`runtime`、`health`、`backupPaths` 这些原样保留——换目录不等于换应用。
+2. **旧目录里的版本不搬**。改完落点后新目录是空的，`current` 变成 `null`，必须重新发一版才会跑起来。迁移是老版本留原地、新版本进新目录，不做隐式搬家。
+3. **拒绝盘根与系统目录**。`C:\`、`C:\Windows`、`C:\Program Files`、`/etc`、`/usr`
+   一律拒绝——这些地方建 `releases/` 会毁系统。
+
+写回是「临时文件 + 改名」，写完下一次请求就生效（部署器每次被 ssh 拉起都重新读配置，
+不需要重启任何守护进程）。改之前建议先备份配置：
+
+```powershell
+copy C:\airlock\config\deployer.json C:\airlock\config\deployer.json.bak
+```
+
+
 ## 服务器配置
 
 `/etc/airlock/deployer.json`：

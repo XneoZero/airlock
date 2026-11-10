@@ -9,7 +9,7 @@ import { execFile } from 'node:child_process';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { packRelease } from '../local.ts';
 import { DeployError } from '../errors.ts';
@@ -223,79 +223,6 @@ function findFoldersByName(name: string): string[] {
     }
   }
   return found;
-}
-
-/** 目录浏览器的快捷位置：发版最常从桌面开始，其余是兜底。 */
-export function placesFor(workspace: string): Array<{ name: string; path: string }> {
-  const candidates: Array<[string, string]> = [
-    ['桌面', join(homedir(), 'Desktop')],
-    ['文档', join(homedir(), 'Documents')],
-    ['下载', join(homedir(), 'Downloads')],
-    ['用户目录', homedir()],
-    ['当前项目', workspace],
-    ['C 盘', 'C:\\'],
-    ['D 盘', 'D:\\'],
-    ['E 盘', 'E:\\'],
-    ['F 盘', 'F:\\'],
-  ];
-  return candidates.filter(([, path]) => existsSync(path)).map(([name, path]) => ({ name, path }));
-}
-
-/** 选目录的默认起点：桌面优先，没有就退到用户目录。 */
-export function defaultBrowsePath(): string {
-  const desktop = join(homedir(), 'Desktop');
-  return existsSync(desktop) ? desktop : homedir();
-}
-
-export interface DirEntry {
-  readonly name: string;
-  readonly path: string;
-  readonly dir: boolean;
-}
-
-/**
- * 列一层目录。只回子目录 + 少量文件：选的是「构建产物放在哪」，
- * 不需要把 node_modules 里几万个文件也搬给前端。
- */
-export function listDirectory(target: string): { path: string; parent: string | null; entries: DirEntry[]; truncated: boolean } {
-  const dir = resolve(target);
-  let stats;
-  try {
-    stats = statSync(dir);
-  } catch {
-    throw new DeployError('INVALID_REQUEST', `目录不存在或不可读：${dir}`);
-  }
-  if (!stats.isDirectory()) throw new DeployError('INVALID_REQUEST', `不是目录：${dir}`);
-
-  let dirents;
-  try {
-    dirents = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    throw new DeployError('INVALID_REQUEST', `没有权限读取：${dir}`);
-  }
-
-  const dirs: DirEntry[] = [];
-  const files: DirEntry[] = [];
-  for (const item of dirents) {
-    if (item.name.startsWith('.')) continue;
-    const full = join(dir, item.name);
-    if (item.isDirectory() || item.isSymbolicLink()) dirs.push({ name: item.name, path: full, dir: true });
-    else files.push({ name: item.name, path: full, dir: false });
-  }
-  const byName = (a: DirEntry, b: DirEntry): number => a.name.localeCompare(b.name, 'zh-CN');
-  dirs.sort(byName);
-  files.sort(byName);
-
-  const MAX_DIRS = 400;
-  const MAX_FILES = 40;
-  const entries = [...dirs.slice(0, MAX_DIRS), ...files.slice(0, MAX_FILES)];
-  const isRoot = /^[A-Za-z]:[\\/]$/.test(dir);
-  return {
-    path: dir,
-    parent: isRoot ? null : dirname(dir),
-    entries,
-    truncated: dirs.length > MAX_DIRS || files.length > MAX_FILES,
-  };
 }
 
 /** 本地项目最近的提交。不是 git 仓库就返回空数组，不报错。 */async function gitLog(workspace: string, limit = 15): Promise<Array<{ hash: string; date: string; author: string; subject: string }>> {
@@ -529,11 +456,24 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
         json(response, 200, { ok: true, paths: findFoldersByName(name) });
         return;
       }
-      if (request.method === 'GET' && url.pathname === '/api/ls') {
+      if (request.method === 'GET' && url.pathname === '/api/server-ls') {
         const project = resolveProject(url.searchParams.get('project'));
         const target = url.searchParams.get('path');
-        const listed = listDirectory(target !== null && target.trim() !== '' ? target.trim() : defaultBrowsePath());
-        json(response, 200, { ok: true, ...listed, places: placesFor(project.workspace) });
+        const listing = await clientFor(project).call({
+          op: 'list-dir',
+          app: project.app,
+          ...(target === null || target.trim() === '' ? {} : { params: { path: target.trim() } }),
+        });
+        json(response, 200, { ok: true, ...(listing as Record<string, unknown>) });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/set-root') {
+        const body = await readBody(request);
+        const project = resolveProject(body.project);
+        const root = typeof body.root === 'string' ? body.root.trim() : '';
+        if (root === '') throw new DeployError('INVALID_REQUEST', '需要目标目录');
+        const updated = await clientFor(project).call({ op: 'set-root', app: project.app, params: { root } });
+        json(response, 200, { ok: true, ...(updated as Record<string, unknown>) });
         return;
       }
       if (request.method === 'POST' && url.pathname === '/api/projects') {

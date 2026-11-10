@@ -41,6 +41,7 @@ export function renderPage(options: PageOptions): string {
   .meta{display:flex;gap:14px;font-family:var(--mono);font-size:12px;color:var(--dim)}
   .meta span b{color:var(--text);font-weight:500}
   .meta span b.copyable{cursor:pointer;border-bottom:1px dashed var(--dim);display:inline-block;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+  .meta .mini{padding:1px 7px;margin-left:6px;font-size:11px;border-radius:5px;vertical-align:middle}
   .spacer{flex:1}
   button{font:inherit;padding:7px 14px;border-radius:7px;border:1px solid var(--line);
          background:#1c222d;color:var(--text);cursor:pointer;transition:.15s}
@@ -130,7 +131,7 @@ export function renderPage(options: PageOptions): string {
   <select id="project-select" title="切换项目"></select>
   <div class="meta">
     <span>服务器 <b id="server">—</b></span>
-    <span>落点 <b id="root" class="copyable" title="点击复制服务器上的目录">—</b></span>
+    <span>落点 <b id="root" class="copyable" title="点击复制服务器上的目录">—</b><button type="button" id="btn-root" class="mini" title="改服务器上的发布目录">改</button></span>
     <span>当前版本 <b id="current">—</b></span>
     <span>一致性 <b id="consistent">—</b></span>
     <span>本地改动 <b id="dirty">—</b></span>
@@ -164,8 +165,8 @@ export function renderPage(options: PageOptions): string {
       <label>发布哪个目录</label>
       <select id="in-source-select"></select>
       <div id="in-source-row" style="display:none;gap:8px;margin-top:8px">
-        <input id="in-source" spellcheck="false" style="flex:1;width:auto" placeholder="输入绝对路径，或点「浏览…」">
-        <button type="button" id="btn-source-browse">浏览…</button>
+        <input id="in-source" spellcheck="false" style="flex:1;width:auto" placeholder="输入绝对路径，或点「选择文件夹…」">
+        <button type="button" id="btn-source-browse">选择文件夹…</button>
       </div>
       <div class="hint" id="source-hint">自动探测到的构建产物目录</div>
       <label>版本号（可选）</label>
@@ -186,10 +187,11 @@ export function renderPage(options: PageOptions): string {
       <h3>添加项目</h3>
       <label>项目目录</label>
       <div style="display:flex;gap:8px">
-        <input id="add-path" spellcheck="false" placeholder="点「浏览…」选目录，或把文件夹拖进窗口" style="flex:1;width:auto">
-        <button type="button" id="add-browse">浏览…</button>
+        <input id="add-path" spellcheck="false" placeholder="点「选择文件夹」用系统窗口选，或把文件夹拖进窗口" style="flex:1;width:auto">
+        <button type="button" id="add-browse">选择文件夹…</button>
       </div>
-      <div class="hint" id="add-path-hint">默认从桌面开始，可以切到任意盘符</div>
+      <input type="file" id="add-picker" webkitdirectory directory multiple style="display:none">
+      <div class="hint" id="add-path-hint">默认打开系统文件夹窗口；浏览器只给文件夹名，选完会自动在常用位置找完整路径</div>
       <label>项目名</label>
       <input id="add-name" placeholder="例如 my-web" spellcheck="false">
       <label>服务器上的应用 id</label>
@@ -205,7 +207,7 @@ export function renderPage(options: PageOptions): string {
 
 <dialog id="browse-dlg">
   <div class="body">
-    <h3>选择文件夹</h3>
+    <h3>选择服务器上的目录</h3>
     <div class="places" id="browse-places"></div>
     <div style="display:flex;gap:8px;margin-top:10px">
       <button type="button" id="browse-up" title="上一级">↑</button>
@@ -383,6 +385,8 @@ export function renderPage(options: PageOptions): string {
     copyText(text);
   });
 
+  q('btn-root').addEventListener('click', function(){ openServerBrowser(); });
+
   // 项目切换器：每个项目对应一个档案（服务器）+ 应用 + 本地目录。
   (function initProjects(){
     var sel = q('project-select');
@@ -462,20 +466,18 @@ export function renderPage(options: PageOptions): string {
     }).catch(function(error){ toast('查找失败：' + error.message, 'err'); });
   }
 
-  // ---- 目录浏览器：默认从桌面开始，能一路进到任意盘 ----
-  var browseTarget = null;
+  // ---- 服务器目录：走部署通道列目录，改的是服务器上的落点 ----
   var browseCurrent = '';
   var browseParent = null;
 
-  function openBrowser(input){
-    browseTarget = input;
+  function openServerBrowser(){
     q('browse-dlg').showModal();
     loadDir('');
   }
 
   function loadDir(path){
     q('browse-list').innerHTML = '<div class="empty">读取中…</div>';
-    var url = '/api/ls?project=' + encodeURIComponent(currentProject) + (path ? '&path=' + encodeURIComponent(path) : '');
+    var url = '/api/server-ls?project=' + encodeURIComponent(currentProject) + (path ? '&path=' + encodeURIComponent(path) : '');
     api(url).then(function(res){
       if (res.status !== 200) throw new Error(res.body.error ? res.body.error.message : '读取失败');
       var d = res.body;
@@ -505,21 +507,21 @@ export function renderPage(options: PageOptions): string {
     });
   }
 
-  /** 把选中的目录写回对应输入框，添加项目时顺手补上项目名。 */
-  function applyPicked(input, path){
-    input.value = path;
-    var parts = path.split(/[\\/]/).filter(function(part){ return part !== ''; });
-    var name = parts.length ? parts[parts.length - 1] : '';
-    if (input.id === 'add-path'){
-      if (!q('add-name').value){
-        var guessed = guessName(name);
-        // 项目名只能用 ASCII：中文目录名规范化后可能为空，给个占位让用户自己改。
-        q('add-name').value = guessed !== '' ? guessed : 'project';
+  /** 改服务器上的发布落点。历史版本留在旧目录，新落点需要重新发一版。 */
+  function setServerRoot(path){
+    toast('正在把服务器落点改到 ' + path + ' …', '');
+    api('/api/set-root', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ project: currentProject, root: path })
+    }).then(function(res){
+      if (res.status === 200 && res.body.ok){
+        toast('服务器落点已改为 ' + path + '，重新发一版才会生效', 'ok');
+        load();
+      } else {
+        toast('改落点失败：' + (res.body.error ? res.body.error.message : '未知错误'), 'err');
       }
-      q('add-path-hint').textContent = '已选 ' + path;
-    } else {
-      q('source-hint').textContent = '已选 ' + path;
-    }
+    }).catch(function(error){ toast('改落点失败：' + error.message, 'err'); });
   }
 
   q('browse-places').addEventListener('click', function(event){
@@ -544,11 +546,66 @@ export function renderPage(options: PageOptions): string {
   q('browse-cancel').addEventListener('click', function(){ q('browse-dlg').close(); });
   q('browse-ok').addEventListener('click', function(){
     if (!browseCurrent){ toast('还没有进入任何目录', 'err'); return; }
-    if (browseTarget) applyPicked(browseTarget, browseCurrent);
     q('browse-dlg').close();
+    setServerRoot(browseCurrent);
   });
 
-  q('add-browse').addEventListener('click', function(){ openBrowser(q('add-path')); });
+  // ---- 本地目录：用系统默认的文件夹选择窗口 ----
+  var pickTarget = null;
+
+  function chooseLocalFolder(input){
+    pickTarget = input;
+    var picker = q('add-picker');
+    if (typeof picker.showPicker === 'function'){
+      try { picker.showPicker(); return; } catch (error) { /* 有些环境不允许，退回 click */ }
+    }
+    picker.click();
+  }
+
+  q('add-picker').addEventListener('change', function(){
+    var files = this.files;
+    if (!files || !files.length) return;
+    var rel = files[0].webkitRelativePath || '';
+    var folderName = rel.split('/')[0] || '';
+    this.value = '';
+    var target = pickTarget;
+    if (!folderName){ toast('没识别到文件夹名，请手动填写路径', 'err'); return; }
+    if (target) resolveLocalFolder(target, folderName);
+  });
+
+  /** 浏览器只给文件夹名，让服务端去常用位置反查完整路径。 */
+  function resolveLocalFolder(input, folderName){
+    if (input.id === 'add-path'){
+      if (!q('add-name').value){
+        var guessed = guessName(folderName);
+        // 项目名只能用 ASCII：中文目录名规范化后可能为空，给个占位让用户自己改。
+        q('add-name').value = guessed !== '' ? guessed : 'project';
+      }
+      q('add-path-hint').textContent = '正在查找「' + folderName + '」的位置…';
+    }
+    api('/api/find-folder', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: folderName })
+    }).then(function(res){
+      var found = (res.status === 200 && res.body.ok && res.body.paths) ? res.body.paths : [];
+      if (found.length){
+        input.value = found[0];
+        var note = found.length > 1
+          ? '找到 ' + found.length + ' 个同名目录，已填第一个：' + found[0] + '（不对就手改）'
+          : '已定位到 ' + found[0];
+        if (input.id === 'add-path') q('add-path-hint').textContent = note;
+        else q('source-hint').textContent = note;
+      } else {
+        var miss = '没找到「' + folderName + '」的完整路径，请手动粘贴';
+        if (input.id === 'add-path') q('add-path-hint').textContent = miss;
+        else q('source-hint').textContent = miss;
+        toast(miss, 'err');
+      }
+    }).catch(function(error){ toast('查找失败：' + error.message, 'err'); });
+  }
+
+  q('add-browse').addEventListener('click', function(){ chooseLocalFolder(q('add-path')); });
 
   q('add-confirm').addEventListener('click', function(){
     var path = q('add-path').value.trim();
@@ -614,7 +671,7 @@ export function renderPage(options: PageOptions): string {
   }
 
   q('in-source-select').addEventListener('change', syncSourceMode);
-  q('btn-source-browse').addEventListener('click', function(){ openBrowser(q('in-source')); });
+  q('btn-source-browse').addEventListener('click', function(){ chooseLocalFolder(q('in-source')); });
 
   q('btn-release').addEventListener('click', function(){
     if (busy) return;
