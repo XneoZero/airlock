@@ -34,6 +34,8 @@ export async function statusOfApp(ctx: DeployContext, appId: unknown, probe: boo
 
   return {
     app: appId,
+    serverId: ctx.config.serverId,
+    kind: ctx.kind,
     root: app.root,
     current: onDisk,
     stateCurrent: state.current,

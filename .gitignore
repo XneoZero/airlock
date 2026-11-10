@@ -7,3 +7,4 @@ data/
 *.local.json
 .DS_Store
 Thumbs.db
+.playwright-mcp/

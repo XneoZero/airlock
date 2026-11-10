@@ -24,6 +24,7 @@ const USAGE = `用法：node bin/airlock-deploy.mjs <命令> [--app 名字] [--p
   release  --app 名字 [--source 目录] [--version 版本] [--exclude a,b] [--commit sha]
   rollback --app 名字 [--to 版本] [--restore-backup]
   logs     --app 名字 [--lines 50]
+  ui       --app 名字 [--port 7788] [--no-open]   本地 Web 控制台
   mcp                                    给 MCP 客户端的 stdio 服务器
 档案：--profile 名字 / AIRLOCK_DEPLOY_PROFILE
       表：--profiles <文件> / AIRLOCK_DEPLOY_PROFILES_FILE（全局放一份，所有项目共用）
@@ -69,6 +70,17 @@ if (command === 'mcp') {
   const child = spawn(process.execPath, [join(SCRIPT_DIR, 'airlock-deploy-mcp.mjs')], {
     stdio: 'inherit',
     env: { ...process.env, ...(options.profile === '' ? {} : { AIRLOCK_DEPLOY_PROFILE: options.profile }) },
+  });
+  child.on('exit', code => process.exit(code ?? 0));
+} else if (command === 'ui') {
+  // 控制台单独起进程：它要常驻并监听端口，和一次性 CLI 的生命周期不同。
+  const env = { ...process.env };
+  if (options.profile !== '') env.AIRLOCK_DEPLOY_PROFILE = options.profile;
+  if (options.profiles !== undefined) env.AIRLOCK_DEPLOY_PROFILES_FILE = options.profiles;
+  const forwarded = process.argv.slice(2).filter(item => item !== 'ui');
+  const child = spawn(process.execPath, [join(SCRIPT_DIR, 'airlock-deploy-ui.mjs'), ...forwarded], {
+    stdio: 'inherit',
+    env,
   });
   child.on('exit', code => process.exit(code ?? 0));
 } else {

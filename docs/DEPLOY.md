@@ -457,6 +457,41 @@ node bin/airlock-deploy.mjs logs --app web --lines 50
 暴露 5 个工具：`deploy_status` / `deploy_list_versions` / `deploy_release` / `deploy_rollback` / `deploy_logs`。
 模型能指定「发哪个应用、用哪个本地目录」，但给不了命令、路径或服务名。
 
+## 本地 Web 控制台
+
+不想敲命令时用这个：
+
+```powershell
+airlock-deploy ui --app demo
+# 控制台已启动：http://127.0.0.1:7788/?t=xxxx
+```
+
+打开后能看到三块：
+
+| 区域 | 内容 |
+|---|---|
+| 本地更改记录 | 项目最近的 git 提交（不在 git 仓库里会明确提示） |
+| 服务器版本 | 每个版本的状态（已部署 / 失败 / 已回滚）、时间、当前版本高亮 |
+| 部署日志 | `deploy.log` 最近 20 行 |
+
+两个动作：
+
+- **发布新版本**：弹窗填源目录（留空用档案里的 workspace）和版本号，确认后走完整流程
+- **回退到此版本**：每个非当前版本那行右侧的按钮，二次确认后执行
+
+安全边界：
+
+1. 只监听 `127.0.0.1`，不对外
+2. 启动时生成一次性 token 放进 URL，所有 API 请求都要带（其他网页猜不到端口也发不了版）
+3. 只有「发布 / 回退 / 读取」三类接口，没有删除版本、改配置、执行命令的入口
+
+token 每次启动都会变。想固定（方便收藏书签）：
+
+```powershell
+airlock-deploy ui --app demo --token my-fixed-token
+# 或设置环境变量 AIRLOCK_UI_TOKEN
+```
+
 ## 安全边界
 
 1. **请求侧不提交命令**：`start` / `stop` / `install` / 健康检查全部来自服务器本地配置。
