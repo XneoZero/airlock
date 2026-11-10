@@ -311,6 +311,7 @@ restrict,command="/usr/bin/node /opt/airlock/bin/airlock-deployer.mjs --config /
       "identityFile": "C:/Users/you/.ssh/airlock-deploy",
       "hostKeyChecking": "yes",
       "serverId": "srv-prod01",
+      "app": "web",
       "deployerCommand": "node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json",
       "workspace": "C:/work/my-web"
     }
@@ -318,7 +319,21 @@ restrict,command="/usr/bin/node /opt/airlock/bin/airlock-deployer.mjs --config /
 }
 ```
 
-`workspace` 是默认打包目录。也可以用环境变量 `AIRLOCK_DEPLOY_PROFILES` 内联整张表。
+`workspace` 是默认打包目录，`app` 是服务器上 deployer 配置里的应用 id。**一个档案 = 一个可发布的项目**：
+同一台服务器跑多个应用时，每个应用各配一个档案，控制台就会列出多个项目可切换。
+
+```json
+{
+  "default": "web-prod",
+  "profiles": {
+    "web-prod":  { "app": "web",  "workspace": "D:/work/my-web",   "...": "..." },
+    "api-prod":  { "app": "api",  "workspace": "D:/work/my-api",   "...": "..." },
+    "game-stage":{ "app": "game", "workspace": "D:/work/game",     "...": "..." }
+  }
+}
+```
+
+也可以用环境变量 `AIRLOCK_DEPLOY_PROFILES` 内联整张表。
 
 ## 在别的项目里使用
 
@@ -470,9 +485,12 @@ airlock-deploy ui --app demo
 
 | 区域 | 内容 |
 |---|---|
+| 左上角项目切换器 | 档案表里所有配了 `app` 的项目，切换即换服务器/应用/本地目录 |
 | 本地更改记录 | 项目最近的 git 提交（不在 git 仓库里会明确提示） |
 | 服务器版本 | 每个版本的状态（已部署 / 失败 / 已回滚）、时间、当前版本高亮 |
 | 部署日志 | `deploy.log` 最近 20 行 |
+
+切换项目时，服务器地址、应用、本地目录、候选产物目录会一起变——因为每个项目就是一个档案。
 
 两个动作：
 

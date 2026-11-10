@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { createDeployClient } from '../src/deploy/client.ts';
-import { loadProfile } from '../src/deploy/local.ts';
+import { loadProfileTable } from '../src/deploy/local.ts';
 import { startUiServer } from '../src/deploy/ui/server.ts';
 
 function fail(message, hint) {
@@ -47,29 +47,55 @@ function parseArgs(argv) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-if (options.app === '') fail('需要 --app <应用名>', '例如 --app demo');
 
-let loaded;
+let table;
 try {
-  loaded = loadProfile(options.profile === '' ? undefined : options.profile, options.profiles);
+  table = loadProfileTable(options.profiles);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error), '先配好档案，或用 --profiles 指定');
 }
 
-const workspace = resolve(loaded.baseDir, loaded.profile.workspace ?? '.');
-const client = createDeployClient({ profile: loaded.profile });
+// 每个档案 = 一个可在控制台切换的项目。app 取档案里的 app，其次 --app 兜底。
+const projects = [];
+const skipped = [];
+for (const [name, profile] of Object.entries(table.table.profiles)) {
+  const app = profile.app ?? (options.app === '' ? undefined : options.app);
+  if (app === undefined) {
+    skipped.push(name);
+    continue;
+  }
+  projects.push({
+    name,
+    app,
+    workspace: resolve(table.baseDir, profile.workspace ?? '.'),
+    profile,
+  });
+}
+if (skipped.length > 0) {
+  process.stderr.write(`[airlock-ui] 跳过没有 app 的档案：${skipped.join(', ')}（在档案里写 "app": "web" 或用 --app 指定）\n`);
+}
+if (projects.length === 0) {
+  fail('没有可用的项目', '在档案里给每个项目写 "app": "<应用id>"，或用 --app 指定一个');
+}
+
+const defaultProject = options.profile !== '' && projects.some(item => item.name === options.profile)
+  ? options.profile
+  : (table.table.default !== undefined && projects.some(item => item.name === table.table.default)
+    ? table.table.default
+    : projects[0].name);
+
 // 默认每次随机，避免端口被别的页面猜到；要书签就传 --token 或 AIRLOCK_UI_TOKEN。
 const token = options.token !== '' ? options.token : randomBytes(18).toString('hex');
 
 let ui;
 try {
-  ui = await startUiServer({ client, app: options.app, workspace, token, port: options.port });
+  ui = await startUiServer({ projects, defaultProject, token, port: options.port });
 } catch (error) {
   fail(`启动失败：${error instanceof Error ? error.message : String(error)}`, '换个 --port 试试');
 }
 
 process.stdout.write(`控制台已启动：${ui.url}\n`);
-process.stdout.write(`档案 ${loaded.name} · 应用 ${options.app} · 本地目录 ${workspace}\n`);
+process.stdout.write(`项目 ${projects.map(item => `${item.name}(${item.app})`).join('、')} · 默认 ${defaultProject}\n`);
 process.stdout.write('按 Ctrl+C 停止。\n');
 
 if (options.open) {

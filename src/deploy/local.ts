@@ -35,7 +35,10 @@ export interface LoadedProfile {
  *
  * 优先级这样排的原因：显式参数 > 环境变量 > 约定位置，避免「明明指定了却读到别处」。
  */
-export function loadProfile(name?: string, profilesPath?: string): LoadedProfile {
+/**
+ * 读整张档案表。控制台需要列出所有项目，所以解析逻辑单独抽出来，loadProfile 复用它。
+ */
+export function loadProfileTable(profilesPath?: string): { table: { default?: string; profiles: Record<string, DeployProfile> }; baseDir: string; source: string } {
   const explicitPath = profilesPath ?? process.env[PROFILE_FILE_ENV];
   const inline = process.env[PROFILE_ENV];
   let raw: unknown;
@@ -75,7 +78,11 @@ export function loadProfile(name?: string, profilesPath?: string): LoadedProfile
     const issue = parsed.error.issues[0];
     throw new DeployError('INVALID_REQUEST', `档案不符合契约（${source}）：${issue?.path.join('.') ?? ''} ${issue?.message ?? ''}`.trim());
   }
-  const table = parsed.data;
+  return { table: parsed.data, baseDir, source };
+}
+
+export function loadProfile(name?: string, profilesPath?: string): LoadedProfile {
+  const { table, baseDir } = loadProfileTable(profilesPath);
   const chosen = name ?? table.default;
   if (chosen === undefined || chosen === '') {
     const names = Object.keys(table.profiles).join(', ') || '（空）';

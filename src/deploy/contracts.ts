@@ -150,6 +150,8 @@ export const deployProfileSchema = z.object({
   userKnownHostsFile: z.string().max(400).optional(),
   hostKeyChecking: z.enum(['yes', 'accept-new']).optional(),
   serverId: z.string().max(64).optional(),
+  /** 该档案默认发布的应用 id。同一台服务器跑多个应用时，每个应用各配一个档案。 */
+  app: z.string().regex(APP_ID_RE).optional(),
   /** 服务器侧 deployer 入口，例：node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json */
   deployerCommand: z.string().min(1).max(500),
   /** 默认本地项目目录（相对 profile 文件所在目录或绝对路径）。 */

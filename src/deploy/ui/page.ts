@@ -3,9 +3,18 @@
  *
  * 注意：内联 JS 里刻意不用模板字符串（反引号），否则会和本文件外层的模板字符串打架。
  */
+export interface PageProject {
+  readonly name: string;
+  readonly app: string;
+  readonly workspace: string;
+  readonly serverId: string | null;
+  readonly host: string;
+}
+
 export interface PageOptions {
   readonly token: string;
-  readonly app: string;
+  readonly projects: readonly PageProject[];
+  readonly defaultProject: string;
 }
 
 export function renderPage(options: PageOptions): string {
@@ -14,7 +23,7 @@ export function renderPage(options: PageOptions): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Airlock · ${options.app}</title>
+<title>Airlock 发布控制台</title>
 <style>
   :root{
     --bg:#0f1115; --panel:#161a22; --line:#262c38; --text:#d7dce6; --dim:#8b93a7;
@@ -40,6 +49,9 @@ export function renderPage(options: PageOptions): string {
   button.primary:hover{background:#3f7ef0}
   button.danger{color:var(--bad);border-color:#4a2020}
   button.danger:hover{background:#2a1618;border-color:var(--bad)}
+  select{padding:7px 10px;border-radius:7px;border:1px solid var(--line);background:#1c222d;
+         color:var(--text);font:inherit;max-width:260px}
+  select:hover{border-color:#3a4356}
   main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px 20px}
   @media(max-width:900px){main{grid-template-columns:1fr}}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;
@@ -100,7 +112,8 @@ export function renderPage(options: PageOptions): string {
 </head>
 <body>
 <header>
-  <h1>Airlock <b>·</b> <span id="app-name">${options.app}</span></h1>
+  <h1>Airlock <b>·</b> <span id="app-name">—</span></h1>
+  <select id="project-select" title="切换项目"></select>
   <div class="meta">
     <span>服务器 <b id="server">—</b></span>
     <span>当前版本 <b id="current">—</b></span>
@@ -152,7 +165,9 @@ export function renderPage(options: PageOptions): string {
 (function(){
   'use strict';
   var TOKEN = new URLSearchParams(location.search).get('t') || '';
-  var APP = ${JSON.stringify(options.app)};
+  var PROJECTS = ${JSON.stringify(options.projects)};
+  var currentProject = ${JSON.stringify(options.defaultProject)};
+  var APP = '';
   var busy = false;
   var overviewData = null;
 
@@ -241,11 +256,13 @@ export function renderPage(options: PageOptions): string {
   function load(){
     q('btn-refresh').disabled = true;
     q('btn-refresh').textContent = '刷新中…';
-    api('/api/overview')
+    api('/api/overview?project=' + encodeURIComponent(currentProject))
       .then(function(res){
         if (res.status !== 200){ throw new Error(res.body.error ? res.body.error.message : '读取失败'); }
         var d = res.body;
         overviewData = d;
+        APP = d.app || '';
+        q('app-name').textContent = d.app;
         q('app-name').textContent = d.app;
         q('server').textContent = d.server && d.server.serverId ? d.server.serverId : '不可达';
         q('current').textContent = d.server && d.server.current ? d.server.current : '无';
@@ -273,6 +290,29 @@ export function renderPage(options: PageOptions): string {
   }
 
   q('btn-refresh').addEventListener('click', load);
+
+  // 项目切换器：每个项目对应一个档案（服务器）+ 应用 + 本地目录。
+  (function initProjects(){
+    var sel = q('project-select');
+    if (PROJECTS.length <= 1){ sel.style.display = 'none'; return; }
+    var html = '';
+    for (var i = 0; i < PROJECTS.length; i++){
+      var item = PROJECTS[i];
+      html += '<option value="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) +
+              ' · ' + escapeHtml(item.app) + '</option>';
+    }
+    sel.innerHTML = html;
+    sel.value = currentProject;
+  })();
+
+  q('project-select').addEventListener('change', function(){
+    if (busy) return;
+    currentProject = q('project-select').value;
+    q('git-panel').innerHTML = '<div class="skel"></div><div class="skel"></div>';
+    q('rel-panel').innerHTML = '<div class="skel"></div><div class="skel"></div>';
+    q('log').textContent = '加载中…';
+    load();
+  });
 
   function syncSourceMode(){
     var custom = q('in-source-select').value === '__custom__';
@@ -316,6 +356,7 @@ export function renderPage(options: PageOptions): string {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
+        project: currentProject,
         source: source,
         version: q('in-version').value.trim()
       })
@@ -344,7 +385,7 @@ export function renderPage(options: PageOptions): string {
     api('/api/rollback', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ to: version })
+      body: JSON.stringify({ project: currentProject, to: version })
     }).then(function(res){
       if (res.status === 200 && res.body.ok){
         var r = res.body.result || {};
