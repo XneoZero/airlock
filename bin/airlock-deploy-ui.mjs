@@ -110,6 +110,7 @@ try {
     defaultServer: options.server,
     token,
     port: options.port,
+    airlockRoot: process.cwd(),
     ...(profileFile === undefined ? {} : { profileFile }),
     ...(baseProfile === undefined ? {} : { baseProfile }),
   });

@@ -41,6 +41,8 @@ export interface UiOptions {
   readonly profileFile?: string;
   /** 新项目继承的连接信息（host/user/key 等）。 */
   readonly baseProfile?: DeployProfile;
+  /** 本机 Airlock 目录，写进「接入新服务器」的提示词。 */
+  readonly airlockRoot?: string;
   readonly onProjectsChanged?: (projects: UiProject[]) => void;
 }
 
@@ -453,7 +455,12 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
       const url = new URL(request.url ?? '/', `http://127.0.0.1:${options.port ?? 0}`);
 
       if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-        const page = renderPage({ token, projects: projectSummary(), defaultProject: options.defaultProject });
+        const page = renderPage({
+          token,
+          projects: projectSummary(),
+          defaultProject: options.defaultProject,
+          airlockRoot: options.airlockRoot ?? process.cwd(),
+        });
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         response.end(page);
         return;

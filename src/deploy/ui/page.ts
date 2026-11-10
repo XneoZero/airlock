@@ -15,6 +15,8 @@ export interface PageOptions {
   readonly token: string;
   readonly projects: readonly PageProject[];
   readonly defaultProject: string;
+  /** 本机 Airlock 目录，写进「接入新服务器」的提示词里，agent 直接就能用。 */
+  readonly airlockRoot: string;
 }
 
 export function renderPage(options: PageOptions): string {
@@ -123,6 +125,15 @@ export function renderPage(options: PageOptions): string {
              background:rgba(15,17,21,.86);border:2px dashed var(--accent);
              color:var(--accent);font-size:18px;font-weight:600}
   #drop-veil.show{display:grid}
+  .banner{display:none;margin:0 20px 14px;padding:10px 14px;border-radius:8px;font-size:13px;
+          background:rgba(255,186,80,.10);border:1px solid rgba(255,186,80,.35);color:var(--text)}
+  .banner.show{display:flex;gap:12px;align-items:center;justify-content:space-between}
+  .banner button{padding:4px 10px;font-size:12px;border-radius:6px;flex:none}
+  dialog textarea{width:100%;min-height:220px;padding:10px;border-radius:7px;border:1px solid var(--line);
+                  background:#12161d;color:var(--text);font-family:var(--mono);font-size:12px;
+                  line-height:1.5;resize:vertical}
+  .row2{display:flex;gap:8px}
+  .row2 select{flex:1}
 </style>
 </head>
 <body>
@@ -139,9 +150,15 @@ export function renderPage(options: PageOptions): string {
   </div>
   <div class="spacer"></div>
   <button id="btn-add">＋ 项目</button>
+  <button id="btn-join" title="接一台新服务器">＋ 服务器</button>
   <button id="btn-refresh">刷新</button>
   <button id="btn-release" class="primary">发布新版本</button>
 </header>
+
+<div id="banner" class="banner">
+  <span id="banner-text"></span>
+  <button type="button" id="banner-action">让 agent 搭一台</button>
+</div>
 
 <main>
   <section class="panel">
@@ -224,6 +241,30 @@ export function renderPage(options: PageOptions): string {
   </div>
 </dialog>
 
+<dialog id="join-dlg">
+  <div class="body">
+    <h3>接一台新服务器</h3>
+    <div class="hint" style="margin-top:0">
+      新机器上要装 Node、建部署账号、改 sshd——交给 agent 做最省事。
+      填地址和系统，下面这段直接复制给它，它会按标准流程接完。
+    </div>
+    <div class="row2" style="margin-top:12px">
+      <input id="join-host" spellcheck="false" placeholder="目标机器 IP 或域名，例如 1.2.3.4">
+      <select id="join-platform">
+        <option value="windows">Windows</option>
+        <option value="linux">Linux</option>
+      </select>
+    </div>
+    <label>复制这段给 agent</label>
+    <textarea id="join-prompt" readonly></textarea>
+    <div class="hint">接完它会告诉你服务器名字、应用 id 和落点路径，填进「＋ 服务器」就能用。</div>
+  </div>
+  <div class="foot">
+    <button type="button" id="join-cancel">关闭</button>
+    <button type="button" class="primary" id="join-copy">复制提示词</button>
+  </div>
+</dialog>
+
 <div id="drop-veil">松开以添加这个文件夹</div>
 
 <script>
@@ -233,6 +274,7 @@ export function renderPage(options: PageOptions): string {
   var PROJECTS = ${JSON.stringify(options.projects)};
   var currentProject = ${JSON.stringify(options.defaultProject)};
   var currentServer = '';
+  var AIRLOCK_ROOT = ${JSON.stringify(options.airlockRoot)};
   var APP = '';
   var busy = false;
   var overviewData = null;
@@ -340,6 +382,11 @@ export function renderPage(options: PageOptions): string {
         q('current').textContent = d.server && d.server.current ? d.server.current : '无';
         q('consistent').textContent = d.server && d.server.consistent === true ? '正常' : '不一致';
         q('consistent').style.color = d.server && d.server.consistent === true ? 'var(--ok)' : 'var(--bad)';
+        if (d.server && d.server.error){
+          showBanner('这台服务器连不上：' + d.server.error + ' —— 换一台，或者让 agent 帮你接一台新的。');
+        } else {
+          hideBanner();
+        }
         q('dirty').textContent = d.gitStatus && d.gitStatus.clean === false ? (d.gitStatus.dirty + ' 处未提交') : '干净';
         q('dirty').style.color = d.gitStatus && d.gitStatus.clean === false ? 'var(--warn)' : 'var(--dim)';
         renderGit(d.git || [], d.gitStatus);
@@ -391,6 +438,58 @@ export function renderPage(options: PageOptions): string {
 
   q('btn-root').addEventListener('click', function(){ openServerBrowser(); });
 
+  // ---- 接入新服务器：把「怎么接」写成一段能直接交给 agent 的话 ----
+  function buildJoinPrompt(host, platform){
+    var target = host && host.trim() ? host.trim() : '<目标机器地址>';
+    var os = platform === 'linux' ? 'Linux' : 'Windows';
+    var provision = platform === 'linux'
+      ? 'scripts/provision-windows.ps1 的 Linux 对应流程（没有现成脚本就照它的逻辑做）'
+      : 'scripts/provision-windows.ps1';
+    return [
+      '帮我把一台新机器接成 Airlock 的部署目标。',
+      '',
+      '【本机】Windows，Airlock 在 ' + AIRLOCK_ROOT,
+      '【目标】' + target + '（' + os + '）',
+      '',
+      '按顺序做：',
+      '1. 确认目标机器能 SSH 登录（用现有账号或新建，密钥要专用）。',
+      '2. 装 Node ≥ 24：airlock-deployer 直接跑 .ts，靠内置类型剥离，不需要构建步骤。',
+      '3. 建部署账号（默认 ag-ssh）和专用密钥。不要复用日常账号——SSH 和 RDP 用同一个账号会互相挤掉会话。',
+      '4. 跑 ' + provision + '：创建账号与组、装公钥、配 sshd 的 Match User + ForceCommand，只允许走部署通道。',
+      '5. 把本机 Airlock 的 bin/ 和 src/ 拷到目标机器，写 config/deployer.json（应用 id、root、start/stop、健康检查）。root 默认放管理员桌面。',
+      '6. 在 ' + AIRLOCK_ROOT + '\\\\config\\\\deploy-profiles.json 的 servers 段加一个条目，然后跑',
+      '   node bin/airlock-deploy.mjs status --app <应用>',
+      '   确认能连通、能看到 root。',
+      '',
+      '注意：改 sshd 前先挂 10 分钟自动回滚任务，别把我锁在外面。',
+      '做完告诉我：服务器名字、应用 id、落点路径，以及要开哪些端口。'
+    ].join('\\n');
+  }
+
+  function refreshJoinPrompt(){
+    q('join-prompt').value = buildJoinPrompt(q('join-host').value, q('join-platform').value);
+  }
+
+  function openJoin(){
+    q('join-dlg').showModal();
+    refreshJoinPrompt();
+    q('join-host').focus();
+  }
+
+  q('btn-join').addEventListener('click', openJoin);
+  q('join-host').addEventListener('input', refreshJoinPrompt);
+  q('join-platform').addEventListener('change', refreshJoinPrompt);
+  q('join-cancel').addEventListener('click', function(){ q('join-dlg').close(); });
+  q('join-copy').addEventListener('click', function(){ copyText(q('join-prompt').value); });
+
+  // 连接失败时给一条出路：不是让你去翻文档，是直接给 agent 一段话。
+  function showBanner(text){
+    q('banner-text').textContent = text;
+    q('banner').classList.add('show');
+  }
+  function hideBanner(){ q('banner').classList.remove('show'); }
+  q('banner-action').addEventListener('click', openJoin);
+
   // 项目切换器：每个项目对应一个档案（服务器）+ 应用 + 本地目录。
   (function initProjects(){
     var sel = q('project-select');
@@ -427,13 +526,19 @@ export function renderPage(options: PageOptions): string {
       var s = list[i];
       html += '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.id) + ' · ' + escapeHtml(s.host) + '</option>';
     }
+    html += '<option value="__add__">＋ 接入新服务器…</option>';
     sel.innerHTML = html;
     sel.value = selected || '';
   }
 
   q('server-select').addEventListener('change', function(){
     if (busy) return;
-    currentServer = q('server-select').value;
+    if (this.value === '__add__'){
+      this.value = currentServer;
+      openJoin();
+      return;
+    }
+    currentServer = this.value;
     load();
   });
 
