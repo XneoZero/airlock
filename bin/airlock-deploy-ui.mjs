@@ -8,10 +8,10 @@
  * 用法：node bin/airlock-deploy-ui.mjs --app demo [--port 7788] [--profile 名] [--profiles 文件] [--no-open]
  */
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import process from 'node:process';
-import { createDeployClient } from '../src/deploy/client.ts';
 import { loadProfileTable } from '../src/deploy/local.ts';
 import { startUiServer } from '../src/deploy/ui/server.ts';
 
@@ -84,12 +84,32 @@ const defaultProject = options.profile !== '' && projects.some(item => item.name
     ? table.table.default
     : projects[0].name);
 
+// 控制台要能「添加项目」，所以需要知道档案文件在哪、拿谁做连接模板。
+const profileFile = existsSync(table.source) ? table.source : undefined;
+const template = projects.find(item => item.name === defaultProject) ?? projects[0];
+const baseProfile = template === undefined ? undefined : (() => {
+  const copy = { ...template.profile };
+  delete copy.app;
+  delete copy.workspace;
+  return copy;
+})();
+if (profileFile === undefined) {
+  process.stderr.write('[airlock-ui] 档案来自环境变量，控制台的「添加项目」会不可用（无法写回）\n');
+}
+
 // 默认每次随机，避免端口被别的页面猜到；要书签就传 --token 或 AIRLOCK_UI_TOKEN。
 const token = options.token !== '' ? options.token : randomBytes(18).toString('hex');
 
 let ui;
 try {
-  ui = await startUiServer({ projects, defaultProject, token, port: options.port });
+  ui = await startUiServer({
+    projects,
+    defaultProject,
+    token,
+    port: options.port,
+    ...(profileFile === undefined ? {} : { profileFile }),
+    ...(baseProfile === undefined ? {} : { baseProfile }),
+  });
 } catch (error) {
   fail(`启动失败：${error instanceof Error ? error.message : String(error)}`, '换个 --port 试试');
 }

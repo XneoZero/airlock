@@ -108,6 +108,10 @@ export function renderPage(options: PageOptions): string {
   .skel{height:14px;background:linear-gradient(90deg,#1b2029,#232a36,#1b2029);
         background-size:200% 100%;animation:sh 1.2s infinite;border-radius:4px;margin:10px 16px}
   @keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+  #drop-veil{position:fixed;inset:0;display:none;place-items:center;z-index:30;
+             background:rgba(15,17,21,.86);border:2px dashed var(--accent);
+             color:var(--accent);font-size:18px;font-weight:600}
+  #drop-veil.show{display:grid}
 </style>
 </head>
 <body>
@@ -121,6 +125,7 @@ export function renderPage(options: PageOptions): string {
     <span>本地改动 <b id="dirty">—</b></span>
   </div>
   <div class="spacer"></div>
+  <button id="btn-add">＋ 项目</button>
   <button id="btn-refresh">刷新</button>
   <button id="btn-release" class="primary">发布新版本</button>
 </header>
@@ -160,6 +165,31 @@ export function renderPage(options: PageOptions): string {
 </dialog>
 
 <div id="toast"></div>
+
+<dialog id="add-dlg">
+  <form method="dialog" id="add-form">
+    <div class="body">
+      <h3>添加项目</h3>
+      <label>项目目录</label>
+      <div style="display:flex;gap:8px">
+        <input id="add-path" spellcheck="false" placeholder="把文件夹拖到窗口任意位置，或点浏览" style="flex:1">
+        <button type="button" id="add-browse">浏览…</button>
+      </div>
+      <div class="hint" id="add-path-hint">浏览器拿不到拖拽的绝对路径，拖进来后会自动在常用目录里找同名文件夹</div>
+      <label>项目名</label>
+      <input id="add-name" placeholder="例如 my-web" spellcheck="false">
+      <label>服务器上的应用 id</label>
+      <input id="add-app" placeholder="例如 web（deployer.json 里的 key）" spellcheck="false">
+      <div class="hint">新项目继承当前项目的服务器连接（host / 用户 / 密钥）</div>
+    </div>
+    <div class="foot">
+      <button value="cancel" formnovalidate>取消</button>
+      <button type="button" class="primary" id="add-confirm">添加</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="drop-veil">松开以添加这个文件夹</div>
 
 <script>
 (function(){
@@ -262,6 +292,7 @@ export function renderPage(options: PageOptions): string {
         var d = res.body;
         overviewData = d;
         APP = d.app || '';
+        if (d.projects && d.projects.length) rebuildProjectSelect(d.projects);
         q('app-name').textContent = d.app;
         q('app-name').textContent = d.app;
         q('server').textContent = d.server && d.server.serverId ? d.server.serverId : '不可达';
@@ -312,6 +343,127 @@ export function renderPage(options: PageOptions): string {
     q('rel-panel').innerHTML = '<div class="skel"></div><div class="skel"></div>';
     q('log').textContent = '加载中…';
     load();
+  });
+
+  // ---- 添加项目 ----
+  function rebuildProjectSelect(list){
+    var sel = q('project-select');
+    var html = '';
+    for (var i = 0; i < list.length; i++){
+      var item = list[i];
+      html += '<option value="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) +
+              ' · ' + escapeHtml(item.app) + '</option>';
+    }
+    sel.innerHTML = html;
+    sel.style.display = list.length <= 1 ? 'none' : '';
+    sel.value = currentProject;
+  }
+
+  function guessName(path){
+    var parts = String(path).split(/[\\\\/]+/).filter(Boolean);
+    var base = parts.length ? parts[parts.length - 1] : '';
+    return base.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  }
+
+  q('btn-add').addEventListener('click', function(){
+    q('add-path').value = '';
+    q('add-name').value = '';
+    q('add-app').value = '';
+    q('add-path-hint').textContent = '浏览器拿不到拖拽的绝对路径，拖进来后会自动在常用目录里找同名文件夹';
+    q('add-dlg').showModal();
+    q('add-path').focus();
+  });
+
+  q('add-browse').addEventListener('click', function(){
+    var button = q('add-browse');
+    button.disabled = true;
+    button.textContent = '等待选择…';
+    api('/api/pick-folder', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+      .then(function(res){
+        if (res.status === 200 && res.body.ok && res.body.path){
+          q('add-path').value = res.body.path;
+          if (!q('add-name').value) q('add-name').value = guessName(res.body.path);
+        } else if (res.status !== 200){
+          toast('打开对话框失败：' + (res.body.error ? res.body.error.message : '未知错误'), 'err');
+        }
+      })
+      .catch(function(error){ toast('打开对话框失败：' + error.message, 'err'); })
+      .finally(function(){ button.disabled = false; button.textContent = '浏览…'; });
+  });
+
+  q('add-confirm').addEventListener('click', function(){
+    var path = q('add-path').value.trim();
+    var name = q('add-name').value.trim();
+    var app = q('add-app').value.trim();
+    if (!path){ toast('请选择项目目录', 'err'); return; }
+    if (!name){ toast('请填写项目名', 'err'); return; }
+    if (!app){ toast('请填写服务器上的应用 id', 'err'); return; }
+    var button = q('add-confirm');
+    button.disabled = true;
+    api('/api/projects', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: name, app: app, workspace: path })
+    }).then(function(res){
+      if (res.status === 200 && res.body.ok){
+        q('add-dlg').close();
+        currentProject = res.body.name;
+        toast('已添加项目 ' + res.body.name, 'ok');
+        load();
+      } else {
+        toast('添加失败：' + (res.body.error ? res.body.error.message : '未知错误'), 'err');
+      }
+    }).catch(function(error){
+      toast('添加失败：' + error.message, 'err');
+    }).finally(function(){ button.disabled = false; });
+  });
+
+  // 拖拽：浏览器只给文件夹名，所以让服务端去常用目录里找真实路径。
+  var dragDepth = 0;
+  document.addEventListener('dragenter', function(event){
+    event.preventDefault();
+    dragDepth += 1;
+    if (dragDepth === 1) q('drop-veil').classList.add('show');
+  });
+  document.addEventListener('dragover', function(event){ event.preventDefault(); });
+  document.addEventListener('dragleave', function(event){
+    event.preventDefault();
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) q('drop-veil').classList.remove('show');
+  });
+  document.addEventListener('drop', function(event){
+    event.preventDefault();
+    dragDepth = 0;
+    q('drop-veil').classList.remove('show');
+    var items = event.dataTransfer && event.dataTransfer.items;
+    var name = '';
+    if (items && items.length){
+      var entry = items[0].webkitGetAsEntry ? items[0].webkitGetAsEntry() : null;
+      name = entry ? entry.name : (items[0].getAsFile() ? items[0].getAsFile().name : '');
+    }
+    if (!name){ toast('没识别到文件夹，试试点「浏览…」', 'err'); return; }
+    toast('正在查找 ' + name + ' 的位置…', '');
+    api('/api/find-folder', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: name })
+    }).then(function(res){
+      if (res.status === 200 && res.body.ok && res.body.paths && res.body.paths.length){
+        var found = res.body.paths[0];
+        q('add-dlg').showModal();
+        q('add-path').value = found;
+        q('add-name').value = q('add-name').value || guessName(found);
+        q('add-path-hint').textContent = res.body.paths.length > 1
+          ? '找到 ' + res.body.paths.length + ' 个同名文件夹，已填第一个：' + found + '（不对就点浏览换）'
+          : '已定位到 ' + found;
+        toast('找到了 ' + name, 'ok');
+      } else {
+        q('add-dlg').showModal();
+        q('add-name').value = q('add-name').value || guessName(name);
+        q('add-path-hint').textContent = '没能自动定位「' + name + '」，请点「浏览…」选择';
+        toast('没找到 ' + name + ' 的完整路径，请手动选择', 'err');
+      }
+    }).catch(function(error){ toast('查找失败：' + error.message, 'err'); });
   });
 
   function syncSourceMode(){

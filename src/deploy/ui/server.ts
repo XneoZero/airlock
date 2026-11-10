@@ -7,7 +7,8 @@
  */
 import { execFile } from 'node:child_process';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { packRelease } from '../local.ts';
@@ -32,6 +33,11 @@ export interface UiOptions {
   readonly defaultProject: string;
   readonly token: string;
   readonly port?: number;
+  /** 可写回的档案文件路径；为空时「添加项目」不可用（例如档案来自内联 JSON）。 */
+  readonly profileFile?: string;
+  /** 新项目继承的连接信息（host/user/key 等）。 */
+  readonly baseProfile?: DeployProfile;
+  readonly onProjectsChanged?: (projects: UiProject[]) => void;
 }
 
 export interface UiServer {
@@ -108,8 +114,96 @@ function listCandidates(workspace: string): Candidate[] {
   return result;
 }
 
-/** 本地项目最近的提交。不是 git 仓库就返回空数组，不报错。 */
-async function gitLog(workspace: string, limit = 15): Promise<Array<{ hash: string; date: string; author: string; subject: string }>> {
+/**
+ * 弹 Windows 原生「选择文件夹」对话框。浏览器拿不到绝对路径，只能让服务端弹。
+ * 需要 STA 线程，所以带 -STA；用户点取消时返回 null。
+ */
+async function pickFolder(): Promise<string | null> {
+  if (process.platform !== 'win32') {
+    throw new DeployError('INVALID_REQUEST', '原生文件夹对话框目前只支持 Windows，请手动输入路径');
+  }
+  const script = [
+    'Add-Type -AssemblyName System.Windows.Forms | Out-Null',
+    '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+    "$dialog.Description = '选择要发布的本地项目目录'",
+    '$dialog.ShowNewFolderButton = $true',
+    '$result = $dialog.ShowDialog()',
+    'if ($result -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }',
+  ].join('; ');
+  try {
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], {
+      windowsHide: true,
+      timeout: 180_000,
+    });
+    const picked = stdout.trim();
+    return picked === '' ? null : picked;
+  } catch (error) {
+    throw new DeployError('INTERNAL', `打开文件夹对话框失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** 拖拽只能拿到文件夹名，就在用户常用目录里找同名文件夹。只扫两层，避免拖慢。 */
+const SEARCH_ROOTS = ['Desktop', 'Documents', 'Downloads', 'Projects', 'project', 'work', 'code', 'src', 'dev', 'repos'];
+const SEARCH_DRIVES = ['D:', 'E:', 'F:'];
+
+function findFoldersByName(name: string): string[] {
+  const wanted = name.toLowerCase();
+  const roots: string[] = [];
+  for (const sub of SEARCH_ROOTS) {
+    const abs = join(homedir(), sub);
+    if (existsSync(abs)) roots.push(abs);
+  }
+  for (const drive of SEARCH_DRIVES) {
+    if (existsSync(drive)) {
+      roots.push(drive);
+      roots.push(join(drive, 'work'));
+      roots.push(join(drive, 'Projects'));
+    }
+  }
+  const found: string[] = [];
+  const seen = new Set<string>();
+  for (const root of roots) {
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (found.length >= 8) break;
+      const abs = join(root, entry);
+      if (!existsSync(abs) || !statSync(abs).isDirectory()) continue;
+      if (entry.toLowerCase() === wanted && !seen.has(abs)) {
+        found.push(abs);
+        seen.add(abs);
+        continue;
+      }
+      // 再往下一层找（很多项目放在 D:\work\<项目> 这种位置）
+      let children: string[] = [];
+      try {
+        children = readdirSync(abs);
+      } catch {
+        continue;
+      }
+      for (const child of children) {
+        if (found.length >= 8) break;
+        const childAbs = join(abs, child);
+        if (child.toLowerCase() !== wanted) continue;
+        try {
+          if (!statSync(childAbs).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+        if (seen.has(childAbs)) continue;
+        found.push(childAbs);
+        seen.add(childAbs);
+      }
+    }
+  }
+  return found;
+}
+
+/** 本地项目最近的提交。不是 git 仓库就返回空数组，不报错。 */async function gitLog(workspace: string, limit = 15): Promise<Array<{ hash: string; date: string; author: string; subject: string }>> {
   if (!existsSync(workspace)) return [];
   try {
     const { stdout } = await execFileAsync('git', [
@@ -135,9 +229,52 @@ async function gitStatus(workspace: string): Promise<{ clean: boolean; dirty: nu
 }
 
 export async function startUiServer(options: UiOptions): Promise<UiServer> {
-  const { projects, token } = options;
+  const { token } = options;
+  let projects: UiProject[] = [...options.projects];
   const clients = new Map<string, DeployClient>();
   let releaseInFlight = false;
+
+  /**
+   * 追加一个项目：写回档案文件，然后重建内存里的项目列表。
+   * 只接受「本地目录存在」的路径，避免写进去一个打不开的项目。
+   */
+  async function addProject(body: Record<string, unknown>): Promise<{ name: string; project: UiProject }> {
+    const file = options.profileFile;
+    if (file === undefined || file === '') {
+      throw new DeployError('INVALID_REQUEST', '当前档案来自环境变量或内联 JSON，无法写回。用 --profiles <文件> 启动控制台才能添加项目。');
+    }
+    if (options.baseProfile === undefined) {
+      throw new DeployError('INVALID_REQUEST', '没有可用于继承的连接信息');
+    }
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const app = typeof body.app === 'string' ? body.app.trim() : '';
+    const workspace = typeof body.workspace === 'string' ? body.workspace.trim() : '';
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/i.test(name)) {
+      throw new DeployError('INVALID_REQUEST', '项目名只能用字母、数字、连字符（1-64 位）');
+    }
+    if (!/^[a-z][a-z0-9-]{1,31}$/.test(app)) {
+      throw new DeployError('INVALID_REQUEST', '应用 id 必须小写字母开头，2-32 位字母数字与连字符');
+    }
+    if (workspace === '') throw new DeployError('INVALID_REQUEST', '需要选择项目目录');
+    if (!existsSync(workspace) || !statSync(workspace).isDirectory()) {
+      throw new DeployError('INVALID_REQUEST', `目录不存在：${workspace}`);
+    }
+    if (projects.some(item => item.name === name)) {
+      throw new DeployError('INVALID_REQUEST', `项目已存在：${name}`);
+    }
+
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as { default?: string; profiles: Record<string, DeployProfile> };
+    if (raw.profiles === undefined || typeof raw.profiles !== 'object') {
+      throw new DeployError('INVALID_REQUEST', '档案文件结构不对，缺少 profiles');
+    }
+    raw.profiles[name] = { ...options.baseProfile, app, workspace };
+    writeFileSync(file, `${JSON.stringify(raw, null, 2)}\n`, 'utf8');
+
+    const project: UiProject = { name, app, workspace, profile: raw.profiles[name] };
+    projects = [...projects, project];
+    options.onProjectsChanged?.(projects);
+    return { name, project };
+  }
 
   function resolveProject(raw: unknown): UiProject {
     const name = typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : options.defaultProject;
@@ -278,6 +415,23 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
 
       if (request.method === 'GET' && url.pathname === '/api/overview') {
         await handleOverview(resolveProject(url.searchParams.get('project')), response);
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/pick-folder') {
+        json(response, 200, { ok: true, path: await pickFolder() });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/find-folder') {
+        const body = await readBody(request);
+        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        if (name === '') throw new DeployError('INVALID_REQUEST', '需要文件夹名');
+        json(response, 200, { ok: true, paths: findFoldersByName(name) });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/projects') {
+        const body = await readBody(request);
+        const created = await addProject(body);
+        json(response, 200, { ok: true, name: created.name, project: { name: created.name, app: created.project.app, workspace: created.project.workspace } });
         return;
       }
       if (request.method === 'POST' && url.pathname === '/api/release') {
