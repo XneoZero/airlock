@@ -1,0 +1,24 @@
+{
+  "profileId": "prod",
+  "serverId": "srv-prod01",
+  "workspaceId": "ws-app",
+  "root": "/opt/airlock/workspace",
+  "stateDir": "/opt/airlock/state",
+  "releaseInbox": "/opt/airlock/inbox",
+  "writable": true,
+  "maxFileBytes": 262144,
+  "maxListEntries": 500,
+  "leaseTtlMs": 1800000,
+  "tasks": {
+    "test": {
+      "command": "npm",
+      "args": ["test"],
+      "timeoutMs": 600000
+    },
+    "build": {
+      "command": "npm",
+      "args": ["run", "build"],
+      "timeoutMs": 600000
+    }
+  }
+}

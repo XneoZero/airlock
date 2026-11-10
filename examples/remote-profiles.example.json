@@ -1,0 +1,14 @@
+{
+  "default": "dev",
+  "profiles": {
+    "dev": {
+      "serverId": "srv-dev01",
+      "host": "ssh.example.com",
+      "user": "airlock-dev",
+      "port": 22,
+      "identityFile": "~/.ssh/airlock-dev",
+      "brokerCommand": "node /opt/airlock/bin/airlock-broker.mjs --config /opt/airlock/config/broker.json",
+      "hostKeyChecking": "yes"
+    }
+  }
+}

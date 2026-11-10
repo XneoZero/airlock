@@ -77,7 +77,7 @@ agent / MCP client
 ```
 
 `root` 是唯一可读写的工作区；`stateDir` 与 `releaseInbox` 必须位于工作区之外。
-`tasks` 里没有登记的名字，`check` 一律拒绝。
+`tasks` 里没有登记的名字，`check` 一律拒绝。完整示例见 `examples/broker.example.json`。
 
 ### 2. 本机：profile
 
@@ -100,6 +100,7 @@ agent / MCP client
 
 profile 只放连接信息，不放私钥内容；脚本会拒绝含 `password` / `privateKey` / `token`
 之类字段的 profile。表放在 `config/remote-profiles.json`，或用 `AIRLOCK_PROFILES` 内联。
+完整示例见 `examples/remote-profiles.example.json`。
 
 ### 3. CLI
 
