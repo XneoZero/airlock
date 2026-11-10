@@ -100,6 +100,15 @@ export function renderPage(options: PageOptions): string {
   dialog .foot{display:flex;justify-content:flex-end;gap:10px;padding:14px 18px;
                border-top:1px solid var(--line)}
   .hint{font-size:11.5px;color:var(--dim);margin-top:6px}
+  .places{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+  .places button{padding:5px 10px;font-size:12px;border-radius:6px}
+  .dirlist{margin-top:10px;max-height:44vh;overflow:auto;border:1px solid var(--line);border-radius:8px;background:#12161d}
+  .dirlist .row{display:flex;align-items:center;gap:8px;padding:6px 11px;cursor:pointer;
+                font-family:var(--mono);font-size:12px;border-bottom:1px solid rgba(255,255,255,.03)}
+  .dirlist .row:hover{background:rgba(255,255,255,.055)}
+  .dirlist .row .ico{width:12px;flex:none;color:var(--dim)}
+  .dirlist .row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dirlist .empty{padding:16px;text-align:center;color:var(--dim);font-size:12px}
   #toast{position:fixed;right:20px;bottom:20px;max-width:420px;padding:12px 16px;border-radius:9px;
          background:#1c222d;border:1px solid var(--line);font-size:13px;opacity:0;
          transform:translateY(8px);transition:.2s;pointer-events:none;z-index:20;white-space:pre-wrap}
@@ -154,7 +163,10 @@ export function renderPage(options: PageOptions): string {
       <h3>发布新版本</h3>
       <label>发布哪个目录</label>
       <select id="in-source-select"></select>
-      <input id="in-source" spellcheck="false" style="display:none;margin-top:8px" placeholder="输入绝对路径">
+      <div id="in-source-row" style="display:none;gap:8px;margin-top:8px">
+        <input id="in-source" spellcheck="false" style="flex:1;width:auto" placeholder="输入绝对路径，或点「浏览…」">
+        <button type="button" id="btn-source-browse">浏览…</button>
+      </div>
       <div class="hint" id="source-hint">自动探测到的构建产物目录</div>
       <label>版本号（可选）</label>
       <input id="in-version" placeholder="留空按时间戳 + git 提交生成" spellcheck="false">
@@ -174,11 +186,10 @@ export function renderPage(options: PageOptions): string {
       <h3>添加项目</h3>
       <label>项目目录</label>
       <div style="display:flex;gap:8px">
-        <input id="add-path" spellcheck="false" placeholder="把文件夹拖到窗口任意位置，或点「选择文件夹」" style="flex:1">
-        <button type="button" id="add-browse">选择文件夹…</button>
+        <input id="add-path" spellcheck="false" placeholder="点「浏览…」选目录，或把文件夹拖进窗口" style="flex:1;width:auto">
+        <button type="button" id="add-browse">浏览…</button>
       </div>
-      <input type="file" id="add-picker" webkitdirectory directory multiple style="display:none">
-      <div class="hint" id="add-path-hint">浏览器拿不到拖拽的绝对路径，拖进来后会自动在常用目录里找同名文件夹</div>
+      <div class="hint" id="add-path-hint">默认从桌面开始，可以切到任意盘符</div>
       <label>项目名</label>
       <input id="add-name" placeholder="例如 my-web" spellcheck="false">
       <label>服务器上的应用 id</label>
@@ -190,6 +201,24 @@ export function renderPage(options: PageOptions): string {
       <button type="button" class="primary" id="add-confirm">添加</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="browse-dlg">
+  <div class="body">
+    <h3>选择文件夹</h3>
+    <div class="places" id="browse-places"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button type="button" id="browse-up" title="上一级">↑</button>
+      <input id="browse-path" spellcheck="false" style="flex:1;width:auto;font-family:var(--mono);font-size:12px">
+      <button type="button" id="browse-go">转到</button>
+    </div>
+    <div class="dirlist" id="browse-list"></div>
+    <div class="hint">单击进入子目录，「用这个目录」选中当前所在目录</div>
+  </div>
+  <div class="foot">
+    <button type="button" id="browse-cancel">取消</button>
+    <button type="button" class="primary" id="browse-ok">用这个目录</button>
+  </div>
 </dialog>
 
 <div id="drop-veil">松开以添加这个文件夹</div>
@@ -401,7 +430,7 @@ export function renderPage(options: PageOptions): string {
     q('add-path').value = '';
     q('add-name').value = '';
     q('add-app').value = '';
-    q('add-path-hint').textContent = '浏览器拿不到拖拽的绝对路径，拖进来后会自动在常用目录里找同名文件夹';
+    q('add-path-hint').textContent = '默认从桌面开始，可以切到任意盘符';
     q('add-dlg').showModal();
     q('add-path').focus();
   });
@@ -433,23 +462,93 @@ export function renderPage(options: PageOptions): string {
     }).catch(function(error){ toast('查找失败：' + error.message, 'err'); });
   }
 
-  q('add-browse').addEventListener('click', function(){
-    var picker = q('add-picker');
-    if (typeof picker.showPicker === 'function') {
-      try { picker.showPicker(); return; } catch (e) { /* 退回普通 click */ }
+  // ---- 目录浏览器：默认从桌面开始，能一路进到任意盘 ----
+  var browseTarget = null;
+  var browseCurrent = '';
+  var browseParent = null;
+
+  function openBrowser(input){
+    browseTarget = input;
+    q('browse-dlg').showModal();
+    loadDir('');
+  }
+
+  function loadDir(path){
+    q('browse-list').innerHTML = '<div class="empty">读取中…</div>';
+    var url = '/api/ls?project=' + encodeURIComponent(currentProject) + (path ? '&path=' + encodeURIComponent(path) : '');
+    api(url).then(function(res){
+      if (res.status !== 200) throw new Error(res.body.error ? res.body.error.message : '读取失败');
+      var d = res.body;
+      browseCurrent = d.path;
+      browseParent = d.parent;
+      q('browse-path').value = d.path;
+      q('browse-up').disabled = !d.parent;
+      var places = d.places || [];
+      var ph = '';
+      for (var i = 0; i < places.length; i++){
+        ph += '<button type="button" data-place="' + escapeHtml(places[i].path) + '">' + escapeHtml(places[i].name) + '</button>';
+      }
+      q('browse-places').innerHTML = ph;
+      var list = d.entries || [];
+      var html = '';
+      for (var j = 0; j < list.length; j++){
+        var e = list[j];
+        html += '<div class="row" data-path="' + escapeHtml(e.path) + '" data-dir="' + (e.dir ? '1' : '0') + '">' +
+                  '<span class="ico">' + (e.dir ? '▸' : '·') + '</span>' +
+                  '<span class="nm">' + escapeHtml(e.name) + '</span></div>';
+      }
+      if (!html) html = '<div class="empty">这个目录是空的</div>';
+      else if (d.truncated) html += '<div class="empty">目录太大，只显示了一部分</div>';
+      q('browse-list').innerHTML = html;
+    }).catch(function(error){
+      q('browse-list').innerHTML = '<div class="empty">' + escapeHtml(error.message) + '</div>';
+    });
+  }
+
+  /** 把选中的目录写回对应输入框，添加项目时顺手补上项目名。 */
+  function applyPicked(input, path){
+    input.value = path;
+    var parts = path.split(/[\\/]/).filter(function(part){ return part !== ''; });
+    var name = parts.length ? parts[parts.length - 1] : '';
+    if (input.id === 'add-path'){
+      if (!q('add-name').value){
+        var guessed = guessName(name);
+        // 项目名只能用 ASCII：中文目录名规范化后可能为空，给个占位让用户自己改。
+        q('add-name').value = guessed !== '' ? guessed : 'project';
+      }
+      q('add-path-hint').textContent = '已选 ' + path;
+    } else {
+      q('source-hint').textContent = '已选 ' + path;
     }
-    picker.click();
+  }
+
+  q('browse-places').addEventListener('click', function(event){
+    var button = event.target.closest ? event.target.closest('button[data-place]') : null;
+    if (button) loadDir(button.getAttribute('data-place'));
   });
 
-  q('add-picker').addEventListener('change', function(){
-    var files = this.files;
-    if (!files || !files.length) return;
-    var rel = files[0].webkitRelativePath || '';
-    var top = rel.split('/')[0] || '';
-    this.value = '';
-    if (!top){ toast('没识别到文件夹名，请手动填写路径', 'err'); return; }
-    locateFolder(top);
+  q('browse-list').addEventListener('click', function(event){
+    var row = event.target.closest ? event.target.closest('.row') : null;
+    if (!row) return;
+    if (row.getAttribute('data-dir') === '1') loadDir(row.getAttribute('data-path'));
   });
+
+  q('browse-up').addEventListener('click', function(){ if (browseParent) loadDir(browseParent); });
+  q('browse-go').addEventListener('click', function(){
+    var value = q('browse-path').value.trim();
+    if (value) loadDir(value);
+  });
+  q('browse-path').addEventListener('keydown', function(event){
+    if (event.key === 'Enter'){ event.preventDefault(); q('browse-go').click(); }
+  });
+  q('browse-cancel').addEventListener('click', function(){ q('browse-dlg').close(); });
+  q('browse-ok').addEventListener('click', function(){
+    if (!browseCurrent){ toast('还没有进入任何目录', 'err'); return; }
+    if (browseTarget) applyPicked(browseTarget, browseCurrent);
+    q('browse-dlg').close();
+  });
+
+  q('add-browse').addEventListener('click', function(){ openBrowser(q('add-path')); });
 
   q('add-confirm').addEventListener('click', function(){
     var path = q('add-path').value.trim();
@@ -507,7 +606,7 @@ export function renderPage(options: PageOptions): string {
 
   function syncSourceMode(){
     var custom = q('in-source-select').value === '__custom__';
-    q('in-source').style.display = custom ? 'block' : 'none';
+    q('in-source-row').style.display = custom ? 'flex' : 'none';
     q('source-hint').textContent = custom
       ? '填绝对路径，比如 D:\\work\\my-project\\dist'
       : '自动探测到的构建产物目录，发布前请确认内容';
@@ -515,6 +614,7 @@ export function renderPage(options: PageOptions): string {
   }
 
   q('in-source-select').addEventListener('change', syncSourceMode);
+  q('btn-source-browse').addEventListener('click', function(){ openBrowser(q('in-source')); });
 
   q('btn-release').addEventListener('click', function(){
     if (busy) return;
