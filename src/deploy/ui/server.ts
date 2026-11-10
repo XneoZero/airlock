@@ -351,7 +351,13 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
       workspace: project.workspace,
       candidates: listCandidates(project.workspace),
       server: (statusData as { error?: string }).error === undefined
-        ? { serverId: statusData.serverId ?? null, kind: statusData.kind ?? null, current: statusData.current ?? null, consistent: statusData.consistent ?? null }
+        ? {
+            serverId: statusData.serverId ?? null,
+            kind: statusData.kind ?? null,
+            root: statusData.root ?? null,
+            current: statusData.current ?? null,
+            consistent: statusData.consistent ?? null,
+          }
         : { error: (statusData as { error: string }).error },
       releases: listData?.releases ?? [],
       history: listData?.history ?? [],

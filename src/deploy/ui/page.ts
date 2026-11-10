@@ -40,6 +40,7 @@ export function renderPage(options: PageOptions): string {
   h1 b{color:var(--accent);font-weight:600}
   .meta{display:flex;gap:14px;font-family:var(--mono);font-size:12px;color:var(--dim)}
   .meta span b{color:var(--text);font-weight:500}
+  .meta span b.copyable{cursor:pointer;border-bottom:1px dashed var(--dim);display:inline-block;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
   .spacer{flex:1}
   button{font:inherit;padding:7px 14px;border-radius:7px;border:1px solid var(--line);
          background:#1c222d;color:var(--text);cursor:pointer;transition:.15s}
@@ -120,6 +121,7 @@ export function renderPage(options: PageOptions): string {
   <select id="project-select" title="切换项目"></select>
   <div class="meta">
     <span>服务器 <b id="server">—</b></span>
+    <span>落点 <b id="root" class="copyable" title="点击复制服务器上的目录">—</b></span>
     <span>当前版本 <b id="current">—</b></span>
     <span>一致性 <b id="consistent">—</b></span>
     <span>本地改动 <b id="dirty">—</b></span>
@@ -295,8 +297,11 @@ export function renderPage(options: PageOptions): string {
         APP = d.app || '';
         if (d.projects && d.projects.length) rebuildProjectSelect(d.projects);
         q('app-name').textContent = d.app;
-        q('app-name').textContent = d.app;
         q('server').textContent = d.server && d.server.serverId ? d.server.serverId : '不可达';
+        q('root').textContent = d.server && d.server.root ? d.server.root : '—';
+        q('root').title = d.server && d.server.root
+          ? '点击复制。releases/版本/ 放代码，current 指向在用版本，backups/ 放数据快照'
+          : '服务器不可达';
         q('current').textContent = d.server && d.server.current ? d.server.current : '无';
         q('consistent').textContent = d.server && d.server.consistent === true ? '正常' : '不一致';
         q('consistent').style.color = d.server && d.server.consistent === true ? 'var(--ok)' : 'var(--bad)';
@@ -322,6 +327,32 @@ export function renderPage(options: PageOptions): string {
   }
 
   q('btn-refresh').addEventListener('click', load);
+
+  // 落点路径点一下就复制，方便拿去 RDP 或命令行里看。
+  function copyText(text){
+    function fallback(){
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand('copy'); toast('已复制 ' + text, 'ok'); }
+      catch (e) { toast('复制失败，请手动选中', 'err'); }
+      document.body.removeChild(area);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){ toast('已复制 ' + text, 'ok'); }, fallback);
+      return;
+    }
+    fallback();
+  }
+
+  q('root').addEventListener('click', function(){
+    var text = this.textContent;
+    if (!text || text === '—'){ toast('服务器不可达，没有路径', 'err'); return; }
+    copyText(text);
+  });
 
   // 项目切换器：每个项目对应一个档案（服务器）+ 应用 + 本地目录。
   (function initProjects(){
