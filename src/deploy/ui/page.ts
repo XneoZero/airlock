@@ -132,9 +132,10 @@ export function renderPage(options: PageOptions): string {
   <form method="dialog" id="form">
     <div class="body">
       <h3>发布新版本</h3>
-      <label>源目录（已构建好的产物）</label>
-      <input id="in-source" spellcheck="false">
-      <div class="hint">留空则使用档案里的 workspace</div>
+      <label>发布哪个目录</label>
+      <select id="in-source-select"></select>
+      <input id="in-source" spellcheck="false" style="display:none;margin-top:8px" placeholder="输入绝对路径">
+      <div class="hint" id="source-hint">自动探测到的构建产物目录</div>
       <label>版本号（可选）</label>
       <input id="in-version" placeholder="留空按时间戳 + git 提交生成" spellcheck="false">
     </div>
@@ -153,6 +154,7 @@ export function renderPage(options: PageOptions): string {
   var TOKEN = new URLSearchParams(location.search).get('t') || '';
   var APP = ${JSON.stringify(options.app)};
   var busy = false;
+  var overviewData = null;
 
   function q(id){ return document.getElementById(id); }
 
@@ -243,6 +245,7 @@ export function renderPage(options: PageOptions): string {
       .then(function(res){
         if (res.status !== 200){ throw new Error(res.body.error ? res.body.error.message : '读取失败'); }
         var d = res.body;
+        overviewData = d;
         q('app-name').textContent = d.app;
         q('server').textContent = d.server && d.server.serverId ? d.server.serverId : '不可达';
         q('current').textContent = d.server && d.server.current ? d.server.current : '无';
@@ -271,15 +274,41 @@ export function renderPage(options: PageOptions): string {
 
   q('btn-refresh').addEventListener('click', load);
 
+  function syncSourceMode(){
+    var custom = q('in-source-select').value === '__custom__';
+    q('in-source').style.display = custom ? 'block' : 'none';
+    q('source-hint').textContent = custom
+      ? '填绝对路径，比如 D:\\work\\my-project\\dist'
+      : '自动探测到的构建产物目录，发布前请确认内容';
+    if (custom) q('in-source').focus();
+  }
+
+  q('in-source-select').addEventListener('change', syncSourceMode);
+
   q('btn-release').addEventListener('click', function(){
     if (busy) return;
-    q('in-source').value = '';
+    var sel = q('in-source-select');
+    var html = '';
+    var list = overviewData && overviewData.candidates ? overviewData.candidates : [];
+    for (var i = 0; i < list.length; i++){
+      var c = list[i];
+      html += '<option value="' + escapeHtml(c.path) + '">' + escapeHtml(c.label) +
+              '（' + c.files + ' 项）</option>';
+    }
+    html += '<option value="__custom__">自定义路径…</option>';
+    sel.innerHTML = html;
+    sel.value = list.length ? list[0].path : '__custom__';
     q('in-version').value = '';
+    q('in-source').value = '';
+    syncSourceMode();
     q('dlg').showModal();
   });
 
   q('btn-confirm').addEventListener('click', function(){
     if (busy) return;
+    var sel = q('in-source-select');
+    var source = sel.value === '__custom__' ? q('in-source').value.trim() : sel.value;
+    if (!source){ toast('请选择一个发布目录', 'err'); return; }
     q('dlg').close();
     setBusy(true);
     toast('发布中…', '');
@@ -287,7 +316,7 @@ export function renderPage(options: PageOptions): string {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        source: q('in-source').value.trim(),
+        source: source,
         version: q('in-version').value.trim()
       })
     }).then(function(res){

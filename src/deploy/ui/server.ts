@@ -6,7 +6,8 @@
  */
 import { execFile } from 'node:child_process';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { packRelease } from '../local.ts';
 import { DeployError } from '../errors.ts';
@@ -85,6 +86,46 @@ async function gitStatus(workspace: string): Promise<{ clean: boolean; dirty: nu
   }
 }
 
+/** 常见构建产物目录名。按出现顺序排，前面的更可能是用户想要的。 */
+const CANDIDATE_DIRS = ['dist', 'build', 'out', 'publish', 'release', 'public', 'target', '.next', '.output', 'bin'];
+
+export interface Candidate {
+  readonly path: string;
+  readonly label: string;
+  readonly files: number;
+}
+
+function countEntries(dir: string): number {
+  try {
+    return readdirSync(dir).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 扫描 workspace 下常见的产物目录，给发布弹窗做下拉。
+ * 只认「存在且是目录」的，不递归统计大小——发布前扫一遍大目录会让弹窗卡住。
+ * workspace 本身永远排第一（很多项目直接发布根目录，或 workspace 已经指向 dist）。
+ */
+function listCandidates(workspace: string): Candidate[] {
+  const result: Candidate[] = [];
+  if (existsSync(workspace)) {
+    result.push({ path: workspace, label: '项目根', files: countEntries(workspace) });
+  }
+  for (const name of CANDIDATE_DIRS) {
+    const abs = join(workspace, name);
+    try {
+      if (existsSync(abs) && statSync(abs).isDirectory()) {
+        result.push({ path: abs, label: name, files: countEntries(abs) });
+      }
+    } catch {
+      /* 权限不够就跳过，不影响其它候选 */
+    }
+  }
+  return result;
+}
+
 export async function startUiServer(options: UiOptions): Promise<UiServer> {
   const { client, app, workspace, token } = options;
   let releaseInFlight = false;
@@ -108,6 +149,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
       ok: true,
       app,
       workspace,
+      candidates: listCandidates(workspace),
       server: (statusData as { error?: string }).error === undefined
         ? { serverId: statusData.serverId ?? null, kind: statusData.kind ?? null, current: statusData.current ?? null, consistent: statusData.consistent ?? null }
         : { error: (statusData as { error: string }).error },
