@@ -15,8 +15,10 @@ export interface PageOptions {
   readonly token: string;
   readonly projects: readonly PageProject[];
   readonly defaultProject: string;
-  /** 本机 Airlock 目录，写进「接入新服务器」的提示词里，agent 直接就能用。 */
+  /** 本机 Airlock 安装目录（包根，不是 cwd），写进「接入新服务器」的提示词。 */
   readonly airlockRoot: string;
+  /** 实际生效的档案文件绝对路径；档案来自环境变量时为空。 */
+  readonly profilesFile: string;
 }
 
 export function renderPage(options: PageOptions): string {
@@ -275,6 +277,7 @@ export function renderPage(options: PageOptions): string {
   var currentProject = ${JSON.stringify(options.defaultProject)};
   var currentServer = '';
   var AIRLOCK_ROOT = ${JSON.stringify(options.airlockRoot)};
+  var PROFILES_FILE = ${JSON.stringify(options.profilesFile)};
   var APP = '';
   var busy = false;
   var overviewData = null;
@@ -445,20 +448,24 @@ export function renderPage(options: PageOptions): string {
     var provision = platform === 'linux'
       ? 'scripts/provision-windows.ps1 的 Linux 对应流程（没有现成脚本就照它的逻辑做）'
       : 'scripts/provision-windows.ps1';
+    var profileWhere = PROFILES_FILE !== ''
+      ? PROFILES_FILE
+      : '档案文件 deploy-profiles.json（可能由 AIRLOCK_DEPLOY_PROFILES_FILE 环境变量指定）';
     return [
       '帮我把一台新机器接成 Airlock 的部署目标。',
       '',
-      '【本机】Windows，Airlock 在 ' + AIRLOCK_ROOT,
+      '【工具】Airlock 装在本机 ' + AIRLOCK_ROOT + '（Windows）',
+      '【档案】' + profileWhere,
       '【目标】' + target + '（' + os + '）',
       '',
       '按顺序做：',
       '1. 确认目标机器能 SSH 登录（用现有账号或新建，密钥要专用）。',
-      '2. 装 Node ≥ 24：airlock-deployer 直接跑 .ts，靠内置类型剥离，不需要构建步骤。',
+      '2. 在目标机器装 Node ≥ 24：airlock-deployer 直接跑 .ts，靠内置类型剥离，不需要构建步骤。',
       '3. 建部署账号（默认 ag-ssh）和专用密钥。不要复用日常账号——SSH 和 RDP 用同一个账号会互相挤掉会话。',
-      '4. 跑 ' + provision + '：创建账号与组、装公钥、配 sshd 的 Match User + ForceCommand，只允许走部署通道。',
-      '5. 把本机 Airlock 的 bin/ 和 src/ 拷到目标机器，写 config/deployer.json（应用 id、root、start/stop、健康检查）。root 默认放管理员桌面。',
-      '6. 在 ' + AIRLOCK_ROOT + '\\\\config\\\\deploy-profiles.json 的 servers 段加一个条目，然后跑',
-      '   node bin/airlock-deploy.mjs status --app <应用>',
+      '4. 在 ' + AIRLOCK_ROOT + ' 下跑 ' + provision + '：创建账号与组、装公钥、配 sshd 的 Match User + ForceCommand，只允许走部署通道。',
+      '5. 把 ' + AIRLOCK_ROOT + ' 里的 bin/ 和 src/ 拷到目标机器，写 config/deployer.json（应用 id、root、start/stop、健康检查）。root 默认放管理员桌面。',
+      '6. 在上面的档案里加一个 servers 条目，然后跑',
+      '   node "' + AIRLOCK_ROOT + '\\\\bin\\\\airlock-deploy.mjs" status --app <应用>',
       '   确认能连通、能看到 root。',
       '',
       '注意：改 sshd 前先挂 10 分钟自动回滚任务，别把我锁在外面。',

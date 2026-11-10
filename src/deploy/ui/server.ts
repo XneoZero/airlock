@@ -41,8 +41,10 @@ export interface UiOptions {
   readonly profileFile?: string;
   /** 新项目继承的连接信息（host/user/key 等）。 */
   readonly baseProfile?: DeployProfile;
-  /** 本机 Airlock 目录，写进「接入新服务器」的提示词。 */
+  /** 本机 Airlock 安装目录，写进「接入新服务器」的提示词。 */
   readonly airlockRoot?: string;
+  /** 实际生效的档案文件（真实路径才会传），提示词里要写它而不是猜一个位置。 */
+  readonly profilesFile?: string;
   readonly onProjectsChanged?: (projects: UiProject[]) => void;
 }
 
@@ -460,6 +462,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
           projects: projectSummary(),
           defaultProject: options.defaultProject,
           airlockRoot: options.airlockRoot ?? process.cwd(),
+          profilesFile: options.profilesFile ?? '',
         });
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         response.end(page);

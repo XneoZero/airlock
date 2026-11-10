@@ -10,10 +10,20 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { loadProfileTable } from '../src/deploy/local.ts';
 import { startUiServer } from '../src/deploy/ui/server.ts';
+
+/**
+ * Airlock 自己的安装目录，不是 cwd。
+ *
+ * 用户可能在别的项目里跑全局命令（`airlock-deploy ui`），这时 cwd 是那个项目，
+ * 拿它当「Airlock 装在哪」会写出错误的提示词。本文件永远在包的 bin/ 下，
+ * 往上两级就是包根——全局安装、vendor 进项目、直接 node 跑都成立。
+ */
+const AIRLOCK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 function fail(message, hint) {
   process.stderr.write(`[airlock-ui] ${message}\n`);
@@ -110,7 +120,8 @@ try {
     defaultServer: options.server,
     token,
     port: options.port,
-    airlockRoot: process.cwd(),
+    airlockRoot: AIRLOCK_ROOT,
+    ...(profileFile === undefined ? {} : { profilesFile: profileFile }),
     ...(profileFile === undefined ? {} : { profileFile }),
     ...(baseProfile === undefined ? {} : { baseProfile }),
   });
