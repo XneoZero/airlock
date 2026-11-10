@@ -129,6 +129,7 @@ export function renderPage(options: PageOptions): string {
 <header>
   <h1>Airlock <b>·</b> <span id="app-name">—</span></h1>
   <select id="project-select" title="切换项目"></select>
+  <select id="server-select" title="部署到哪台服务器"></select>
   <div class="meta">
     <span>服务器 <b id="server">—</b></span>
     <span>落点 <b id="root" class="copyable" title="点击复制服务器上的目录">—</b><button type="button" id="btn-root" class="mini" title="改服务器上的发布目录">改</button></span>
@@ -231,6 +232,7 @@ export function renderPage(options: PageOptions): string {
   var TOKEN = new URLSearchParams(location.search).get('t') || '';
   var PROJECTS = ${JSON.stringify(options.projects)};
   var currentProject = ${JSON.stringify(options.defaultProject)};
+  var currentServer = '';
   var APP = '';
   var busy = false;
   var overviewData = null;
@@ -320,13 +322,15 @@ export function renderPage(options: PageOptions): string {
   function load(){
     q('btn-refresh').disabled = true;
     q('btn-refresh').textContent = '刷新中…';
-    api('/api/overview?project=' + encodeURIComponent(currentProject))
+    api('/api/overview?project=' + encodeURIComponent(currentProject)
+        + (currentServer ? '&server=' + encodeURIComponent(currentServer) : ''))
       .then(function(res){
         if (res.status !== 200){ throw new Error(res.body.error ? res.body.error.message : '读取失败'); }
         var d = res.body;
         overviewData = d;
         APP = d.app || '';
         if (d.projects && d.projects.length) rebuildProjectSelect(d.projects);
+        rebuildServerSelect(d.servers || [], currentServer);
         q('app-name').textContent = d.app;
         q('server').textContent = d.server && d.server.serverId ? d.server.serverId : '不可达';
         q('root').textContent = d.server && d.server.root ? d.server.root : '—';
@@ -410,6 +414,29 @@ export function renderPage(options: PageOptions): string {
     load();
   });
 
+  /**
+   * 服务器切换器：同一份代码可以发到不同机器。
+   * 空值表示「项目默认」——用项目档案自己写的那台，老档案只有一台时就是这样。
+   */
+  function rebuildServerSelect(list, selected){
+    var sel = q('server-select');
+    if (!list || !list.length){ sel.style.display = 'none'; return; }
+    sel.style.display = '';
+    var html = '<option value="">项目默认</option>';
+    for (var i = 0; i < list.length; i++){
+      var s = list[i];
+      html += '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.id) + ' · ' + escapeHtml(s.host) + '</option>';
+    }
+    sel.innerHTML = html;
+    sel.value = selected || '';
+  }
+
+  q('server-select').addEventListener('change', function(){
+    if (busy) return;
+    currentServer = q('server-select').value;
+    load();
+  });
+
   // ---- 添加项目 ----
   function rebuildProjectSelect(list){
     var sel = q('project-select');
@@ -477,7 +504,9 @@ export function renderPage(options: PageOptions): string {
 
   function loadDir(path){
     q('browse-list').innerHTML = '<div class="empty">读取中…</div>';
-    var url = '/api/server-ls?project=' + encodeURIComponent(currentProject) + (path ? '&path=' + encodeURIComponent(path) : '');
+    var url = '/api/server-ls?project=' + encodeURIComponent(currentProject)
+            + (currentServer ? '&server=' + encodeURIComponent(currentServer) : '')
+            + (path ? '&path=' + encodeURIComponent(path) : '');
     api(url).then(function(res){
       if (res.status !== 200) throw new Error(res.body.error ? res.body.error.message : '读取失败');
       var d = res.body;
@@ -513,7 +542,7 @@ export function renderPage(options: PageOptions): string {
     api('/api/set-root', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ project: currentProject, root: path })
+      body: JSON.stringify({ project: currentProject, server: currentServer, root: path })
     }).then(function(res){
       if (res.status === 200 && res.body.ok){
         toast('服务器落点已改为 ' + path + '，重新发一版才会生效', 'ok');
@@ -705,6 +734,7 @@ export function renderPage(options: PageOptions): string {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         project: currentProject,
+        server: currentServer,
         source: source,
         version: q('in-version').value.trim()
       })
@@ -733,7 +763,7 @@ export function renderPage(options: PageOptions): string {
     api('/api/rollback', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ project: currentProject, to: version })
+      body: JSON.stringify({ project: currentProject, server: currentServer, to: version })
     }).then(function(res){
       if (res.status === 200 && res.body.ok){
         var r = res.body.result || {};

@@ -26,12 +26,17 @@ async function tempConfig(contents) {
   return { dir, file, cleanup: () => rm(dir, { recursive: true, force: true }) };
 }
 
-test('默认起点是部署账号的桌面，没有桌面就退回家目录', () => {
+test('默认起点：Windows 优先管理员桌面，没有桌面才退回家目录', () => {
   const ctx = contextWith('C:\\airlock\\apps\\demo');
-  const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
   const start = defaultStartDir(ctx);
-  const desktop = join(home, 'Desktop');
-  assert.equal(start, existsSync(desktop) ? desktop : home);
+  const adminDesktop = 'C:\\Users\\Administrator\\Desktop';
+  if (existsSync(adminDesktop)) {
+    assert.equal(start, adminDesktop, 'Windows 上优先落到管理员桌面');
+  } else {
+    const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
+    const desktop = join(home, 'Desktop');
+    assert.equal(start, existsSync(desktop) ? desktop : home);
+  }
   assert.ok(existsSync(start), '默认起点必须是真实存在的目录，不能给个假路径');
 });
 

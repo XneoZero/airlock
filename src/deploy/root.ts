@@ -31,6 +31,14 @@ const MAX_FILES = 40;
 const WINDOWS_BLOCKED = ['windows', 'program files', 'program files (x86)', 'programdata', 'system volume information', '$recycle.bin'];
 const LINUX_BLOCKED = ['/etc', '/usr', '/bin', '/sbin', '/boot', '/lib', '/var/lib', '/proc', '/sys', '/dev'];
 
+/**
+ * Windows 上默认落到内置管理员桌面，而不是部署账号自己的桌面。
+ *
+ * 部署账号的 profile 目录带机器名后缀（`C:\Users\ag-ssh.<machine>`），换机器就变；
+ * 而且产物放在 Administrator 桌面，运维登录上去一眼能看到、能直接拖走。
+ */
+const WINDOWS_ADMIN_DESKTOP = 'C:\\Users\\Administrator\\Desktop';
+
 /** 部署账号的家目录：ssh 会话里 USERPROFILE 就是真实 profile（可能带机器后缀）。 */
 function homeDir(ctx: DeployContext): string {
   const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
@@ -38,8 +46,9 @@ function homeDir(ctx: DeployContext): string {
   return ctx.kind === 'windows' ? 'C:\\' : '/';
 }
 
-/** 默认从桌面开始：发版最常落在桌面，没有桌面就退回家目录。 */
+/** 默认从桌面开始：Windows 优先内置管理员桌面；没有就退回家目录。 */
 export function defaultStartDir(ctx: DeployContext): string {
+  if (ctx.kind === 'windows' && existsSync(WINDOWS_ADMIN_DESKTOP)) return WINDOWS_ADMIN_DESKTOP;
   const home = homeDir(ctx);
   const desktop = join(home, 'Desktop');
   return existsSync(desktop) ? desktop : home;
@@ -47,10 +56,9 @@ export function defaultStartDir(ctx: DeployContext): string {
 
 function placesFor(ctx: DeployContext): Array<{ name: string; path: string }> {
   const home = homeDir(ctx);
-  const candidates: Array<[string, string]> = [
-    ['桌面', join(home, 'Desktop')],
-    ['用户目录', home],
-  ];
+  const candidates: Array<[string, string]> = [];
+  if (ctx.kind === 'windows') candidates.push(['管理员桌面', WINDOWS_ADMIN_DESKTOP]);
+  candidates.push(['桌面', join(home, 'Desktop')], ['用户目录', home]);
   // 现有各应用的落点也放进来，改的时候一眼看到别的应用放在哪。
   for (const [id, app] of Object.entries(ctx.config.apps)) {
     candidates.push([`${id} 当前`, app.root]);

@@ -1,7 +1,7 @@
 {
   "default": "web-prod",
-  "profiles": {
-    "web-prod": {
+  "servers": {
+    "prod": {
       "host": "ssh.example.com",
       "user": "airlock-deploy",
       "port": 22,
@@ -9,29 +9,31 @@
       "userKnownHostsFile": "C:/Users/you/.ssh/known_hosts",
       "hostKeyChecking": "yes",
       "serverId": "srv-prod01",
-      "app": "web",
-      "deployerCommand": "node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json",
-      "workspace": "C:/work/my-web"
+      "deployerCommand": "node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json"
     },
-    "api-prod": {
-      "host": "ssh.example.com",
-      "user": "airlock-deploy",
-      "port": 22,
-      "identityFile": "C:/Users/you/.ssh/airlock-deploy",
-      "hostKeyChecking": "yes",
-      "serverId": "srv-prod01",
-      "app": "api",
-      "deployerCommand": "node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json",
-      "workspace": "C:/work/my-api"
-    },
-    "web-staging": {
+    "staging": {
       "host": "10.0.0.12",
       "user": "deploy",
       "identityFile": "C:/Users/you/.ssh/airlock-staging",
       "hostKeyChecking": "accept-new",
       "serverId": "srv-stage01",
+      "deployerCommand": "node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json"
+    }
+  },
+  "profiles": {
+    "web-prod": {
+      "server": "prod",
       "app": "web",
-      "deployerCommand": "node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json",
+      "workspace": "C:/work/my-web"
+    },
+    "api-prod": {
+      "server": "prod",
+      "app": "api",
+      "workspace": "C:/work/my-api"
+    },
+    "web-staging": {
+      "server": "staging",
+      "app": "web",
       "workspace": "C:/work/my-web"
     }
   }

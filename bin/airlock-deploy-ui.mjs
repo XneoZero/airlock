@@ -22,23 +22,24 @@ function fail(message, hint) {
 }
 
 function parseArgs(argv) {
-  const options = { profile: process.env.AIRLOCK_DEPLOY_PROFILE ?? '', app: '', port: 7788, open: true, token: process.env.AIRLOCK_UI_TOKEN ?? '' };
+  const options = { profile: process.env.AIRLOCK_DEPLOY_PROFILE ?? '', server: '', app: '', port: 7788, open: true, token: process.env.AIRLOCK_UI_TOKEN ?? '' };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--no-open') { options.open = false; continue; }
-    if (arg === '--app' || arg === '--profile' || arg === '--profiles' || arg === '--port' || arg === '--token') {
+    if (arg === '--app' || arg === '--profile' || arg === '--profiles' || arg === '--port' || arg === '--token' || arg === '--server') {
       const value = argv[index + 1];
       if (value === undefined) fail(`${arg} 需要一个值`);
       if (arg === '--app') options.app = value;
       else if (arg === '--profile') options.profile = value;
       else if (arg === '--profiles') options.profiles = value;
       else if (arg === '--token') options.token = value;
+      else if (arg === '--server') options.server = value;
       else options.port = Number(value);
       index += 1;
       continue;
     }
     if (arg === '--help' || arg === '-h') {
-      process.stdout.write('用法：node bin/airlock-deploy-ui.mjs --app <应用名> [--port 7788] [--token 固定值] [--profile 名] [--profiles 文件] [--no-open]\n');
+      process.stdout.write('用法：node bin/airlock-deploy-ui.mjs --app <应用名> [--port 7788] [--token 固定值] [--profile 名] [--server 名] [--profiles 文件] [--no-open]\n');
       process.exit(0);
     }
     fail(`未知参数：${arg}`, '用 --help 查看用法');
@@ -104,7 +105,9 @@ let ui;
 try {
   ui = await startUiServer({
     projects,
+    servers: table.table.servers,
     defaultProject,
+    defaultServer: options.server,
     token,
     port: options.port,
     ...(profileFile === undefined ? {} : { profileFile }),
@@ -116,6 +119,8 @@ try {
 
 process.stdout.write(`控制台已启动：${ui.url}\n`);
 process.stdout.write(`项目 ${projects.map(item => `${item.name}(${item.app})`).join('、')} · 默认 ${defaultProject}\n`);
+const serverNames = Object.keys(table.table.servers);
+if (serverNames.length > 0) process.stdout.write(`服务器可选：${serverNames.join('、')}（控制台右上角切换）\n`);
 process.stdout.write('按 Ctrl+C 停止。\n');
 
 if (options.open) {

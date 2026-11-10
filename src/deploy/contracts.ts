@@ -141,7 +141,21 @@ export type AppState = z.infer<typeof appStateSchema>;
 
 export const STATE_VERSION = 1;
 
-/** 本机档案：服务器连接信息 + 本地工作目录，不放凭据。 */
+/** 一台服务器的连接信息。多个项目可以共用同一台服务器。 */
+export const deployServerSchema = z.object({
+  host: z.string().min(1).max(260),
+  user: z.string().max(64).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  identityFile: z.string().max(400).optional(),
+  userKnownHostsFile: z.string().max(400).optional(),
+  hostKeyChecking: z.enum(['yes', 'accept-new']).optional(),
+  serverId: z.string().max(64).optional(),
+  /** 服务器侧 deployer 入口，例：node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json */
+  deployerCommand: z.string().min(1).max(500),
+}).strict();
+export type DeployServer = z.infer<typeof deployServerSchema>;
+
+/** 解析后的完整档案：连接信息齐全，可以直接建客户端。 */
 export const deployProfileSchema = z.object({
   host: z.string().min(1).max(260),
   user: z.string().max(64).optional(),
@@ -152,14 +166,35 @@ export const deployProfileSchema = z.object({
   serverId: z.string().max(64).optional(),
   /** 该档案默认发布的应用 id。同一台服务器跑多个应用时，每个应用各配一个档案。 */
   app: z.string().regex(APP_ID_RE).optional(),
-  /** 服务器侧 deployer 入口，例：node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json */
   deployerCommand: z.string().min(1).max(500),
   /** 默认本地项目目录（相对 profile 文件所在目录或绝对路径）。 */
   workspace: z.string().max(400).optional(),
 }).strict();
 export type DeployProfile = z.infer<typeof deployProfileSchema>;
 
+/**
+ * 档案文件里的一条。连接信息可以只写 `server` 引用 servers 里的条目，
+ * 也可以内联（老档案就是这么写的，保持兼容）。内联字段优先于引用的服务器。
+ */
+export const deployProfileInputSchema = z.object({
+  server: z.string().min(1).max(64).optional(),
+  host: z.string().min(1).max(260).optional(),
+  user: z.string().max(64).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  identityFile: z.string().max(400).optional(),
+  userKnownHostsFile: z.string().max(400).optional(),
+  hostKeyChecking: z.enum(['yes', 'accept-new']).optional(),
+  serverId: z.string().max(64).optional(),
+  app: z.string().regex(APP_ID_RE).optional(),
+  deployerCommand: z.string().min(1).max(500).optional(),
+  workspace: z.string().max(400).optional(),
+}).strict();
+export type DeployProfileInput = z.infer<typeof deployProfileInputSchema>;
+
 export const deployProfileTableSchema = z.object({
   default: z.string().min(1).max(64).optional(),
-  profiles: z.record(z.string(), deployProfileSchema),
+  /** 所有可用服务器。项目和「服务器」下拉都从这里取。 */
+  servers: z.record(z.string(), deployServerSchema).optional(),
+  profiles: z.record(z.string(), deployProfileInputSchema),
 }).strict();
+export type DeployProfileTable = z.infer<typeof deployProfileTableSchema>;

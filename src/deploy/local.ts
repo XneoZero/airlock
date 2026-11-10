@@ -10,7 +10,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { deployProfileTableSchema, type DeployProfile } from './contracts.ts';
+import {
+  deployProfileTableSchema,
+  type DeployProfile,
+  type DeployProfileInput,
+  type DeployProfileTable,
+  type DeployServer,
+} from './contracts.ts';
 import { packProject, type TreeManifest } from './archive.ts';
 import { DeployError } from './errors.ts';
 
@@ -21,28 +27,70 @@ const PROFILE_FILE = 'config/deploy-profiles.json';
 const HOME_PROFILE_FILE = join(homedir(), '.airlock', 'deploy-profiles.json');
 const execFileAsync = promisify(execFile);
 
-type ProfileTable = { default?: string; profiles: Record<string, DeployProfile> };
+/** 解析后的档案表：连接信息已经展开齐全，可以直接建客户端。 */
+export type ResolvedProfileTable = {
+  default?: string;
+  servers: Record<string, DeployServer>;
+  profiles: Record<string, DeployProfile>;
+};
 
-function readProfileTableFile(path: string): { table: ProfileTable; baseDir: string } {
+function parseTable(raw: unknown, where: string): DeployProfileTable {
+  const parsed = deployProfileTableSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new DeployError('INVALID_REQUEST', `档案不符合契约（${where}）：${issue?.path.join('.') ?? ''} ${issue?.message ?? ''}`.trim());
+  }
+  return parsed.data;
+}
+
+function readProfileTableFile(path: string): { table: DeployProfileTable; baseDir: string } {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     throw new DeployError('INVALID_REQUEST', `档案文件不可读或不是 JSON：${path}`);
   }
-  const parsed = deployProfileTableSchema.safeParse(raw);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    throw new DeployError('INVALID_REQUEST', `档案不符合契约（${path}）：${issue?.path.join('.') ?? ''} ${issue?.message ?? ''}`.trim());
-  }
-  return { table: parsed.data, baseDir: dirname(path) };
+  return { table: parseTable(raw, path), baseDir: dirname(path) };
 }
 
 /** 相对 workspace 按它自己那份档案所在目录解析，合并后才不会互相串味。 */
-function absolutizeWorkspace(profile: DeployProfile, baseDir: string): DeployProfile {
+function absolutizeWorkspace<T extends { workspace?: string }>(profile: T, baseDir: string): T {
   const workspace = profile.workspace;
   if (workspace === undefined || isAbsolute(workspace)) return profile;
   return { ...profile, workspace: resolve(baseDir, workspace) };
+}
+
+/**
+ * 把 `"server": "名字"` 的引用展开成完整连接信息。
+ * 没写引用就必须内联 host + deployerCommand——不猜一台服务器出来。
+ */
+function resolveProfiles(raw: DeployProfileTable, baseDir: string): ResolvedProfileTable {
+  const servers = raw.servers ?? {};
+  const profiles: Record<string, DeployProfile> = {};
+  for (const [name, input] of Object.entries(raw.profiles)) {
+    const { server: serverKey, ...inline } = input;
+    let base: DeployServer | undefined;
+    if (serverKey !== undefined) {
+      base = servers[serverKey];
+      if (base === undefined) {
+        const known = Object.keys(servers).join(', ') || '（空）';
+        throw new DeployError('INVALID_REQUEST', `项目 ${name} 引用了不存在的服务器：${serverKey}。已配置：${known}`);
+      }
+    }
+    const merged = { ...(base ?? {}), ...inline };
+    if (merged.host === undefined || merged.deployerCommand === undefined) {
+      throw new DeployError(
+        'INVALID_REQUEST',
+        `项目 ${name} 缺少连接信息：写 "server": "<名字>" 引用 servers 里的服务器，或直接内联 host + deployerCommand`,
+      );
+    }
+    profiles[name] = absolutizeWorkspace(merged as DeployProfile, baseDir);
+  }
+  return {
+    ...(raw.default === undefined ? {} : { default: raw.default }),
+    servers,
+    profiles,
+  };
 }
 
 export interface LoadedProfile {
@@ -66,7 +114,7 @@ export interface LoadedProfile {
 /**
  * 读整张档案表。控制台需要列出所有项目，所以解析逻辑单独抽出来，loadProfile 复用它。
  */
-export function loadProfileTable(profilesPath?: string): { table: { default?: string; profiles: Record<string, DeployProfile> }; baseDir: string; source: string } {
+export function loadProfileTable(profilesPath?: string): { table: ResolvedProfileTable; baseDir: string; source: string } {
   const explicitPath = profilesPath ?? process.env[PROFILE_FILE_ENV];
   const inline = process.env[PROFILE_ENV];
   let raw: unknown;
@@ -100,25 +148,23 @@ export function loadProfileTable(profilesPath?: string): { table: { default?: st
         `没有可用的档案：${PROFILE_FILE} 与 ~/.airlock/deploy-profiles.json 都不存在。配好其中一份，或用 --profiles <文件> / ${PROFILE_FILE_ENV} 指定，或设置 ${PROFILE_ENV}`,
       );
     }
-    const merged: Record<string, DeployProfile> = {};
+    // 先把各层的 servers / profiles 摊平再统一解析：某层引用的服务器可能定义在另一层。
+    const servers: Record<string, DeployServer> = {};
+    const merged: Record<string, DeployProfileInput> = {};
     for (const layer of layers) {
-      for (const [name, profile] of Object.entries(layer.table.profiles)) {
-        merged[name] = absolutizeWorkspace(profile, layer.baseDir);
+      Object.assign(servers, layer.table.servers ?? {});
+      for (const [name, input] of Object.entries(layer.table.profiles)) {
+        merged[name] = absolutizeWorkspace(input, layer.baseDir);
       }
     }
     const nearest = layers[layers.length - 1];
     const defaultName = nearest?.table.default ?? layers[0]?.table.default;
-    raw = { ...(defaultName === undefined ? {} : { default: defaultName }), profiles: merged };
+    raw = { ...(defaultName === undefined ? {} : { default: defaultName }), servers, profiles: merged };
     baseDir = nearest?.baseDir ?? process.cwd();
     // 「添加项目」写回离当前项目最近的那份，不污染用户级。
     source = existsSync(localPath) ? localPath : HOME_PROFILE_FILE;
   }
-  const parsed = deployProfileTableSchema.safeParse(raw);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    throw new DeployError('INVALID_REQUEST', `档案不符合契约（${source}）：${issue?.path.join('.') ?? ''} ${issue?.message ?? ''}`.trim());
-  }
-  return { table: parsed.data, baseDir, source };
+  return { table: resolveProfiles(parseTable(raw, source), baseDir), baseDir, source };
 }
 
 export function loadProfile(name?: string, profilesPath?: string): LoadedProfile {
@@ -190,9 +236,8 @@ export async function packRelease(options: PackOptions): Promise<PackedRelease> 
 
 export async function readProfileFile(path: string): Promise<DeployProfile> {
   const raw = JSON.parse(await readFile(path, 'utf8')) as unknown;
-  const parsed = deployProfileTableSchema.safeParse(raw);
-  if (!parsed.success) throw new DeployError('INVALID_REQUEST', `档案不符合契约：${path}`);
-  const first = Object.values(parsed.data.profiles)[0];
+  const resolved = resolveProfiles(parseTable(raw, path), dirname(path));
+  const first = Object.values(resolved.profiles)[0];
   if (first === undefined) throw new DeployError('INVALID_REQUEST', `档案表为空：${path}`);
   return first;
 }

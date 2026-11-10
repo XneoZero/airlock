@@ -189,6 +189,10 @@ Add-LocalGroupMember -Group 'Administrators' -Member 'ag-ssh'
    前提是 `start` 命令没有写死旧路径：用 `%CD%`（部署器给这条命令设的 `cwd` 是 `current`）
    而不是绝对路径，改 root 就不用改脚本。模板见
    [examples/windows/start-app.cmd](../examples/windows/start-app.cmd)。
+
+   有一个例外：被 Task Scheduler 直接调用的启动脚本（比如 MC 的 `mc-launch.cmd`）
+   本身放在 `bin\` 下，拿不到 `cwd`，只能把 root 写死在里面——**改 MC 的 root 要连那个脚本一起改**，
+   否则它会从旧目录把服务拉起来（表现为新落点看不到日志、`current` 和实际进程对不上）。
 2. **旧目录里的版本不搬**。改完落点后新目录是空的，`current` 变成 `null`，必须重新发一版才会跑起来。迁移是老版本留原地、新版本进新目录，不做隐式搬家。
 3. **拒绝盘根与系统目录**。`C:\`、`C:\Windows`、`C:\Program Files`、`/etc`、`/usr`
    一律拒绝——这些地方建 `releases/` 会毁系统。
@@ -338,8 +342,8 @@ restrict,command="/usr/bin/node /opt/airlock/bin/airlock-deployer.mjs --config /
 
 ```json
 {
-  "default": "prod",
-  "profiles": {
+  "default": "web-prod",
+  "servers": {
     "prod": {
       "host": "ssh.example.com",
       "user": "airlock-deploy",
@@ -347,27 +351,34 @@ restrict,command="/usr/bin/node /opt/airlock/bin/airlock-deployer.mjs --config /
       "identityFile": "C:/Users/you/.ssh/airlock-deploy",
       "hostKeyChecking": "yes",
       "serverId": "srv-prod01",
-      "app": "web",
-      "deployerCommand": "node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json",
-      "workspace": "C:/work/my-web"
+      "deployerCommand": "node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json"
+    },
+    "staging": {
+      "host": "10.0.0.12",
+      "user": "deploy",
+      "identityFile": "C:/Users/you/.ssh/airlock-staging",
+      "hostKeyChecking": "accept-new",
+      "serverId": "srv-stage01",
+      "deployerCommand": "node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json"
     }
-  }
-}
-```
-
-`workspace` 是默认打包目录，`app` 是服务器上 deployer 配置里的应用 id。**一个档案 = 一个可发布的项目**：
-同一台服务器跑多个应用时，每个应用各配一个档案，控制台就会列出多个项目可切换。
-
-```json
-{
-  "default": "web-prod",
+  },
   "profiles": {
-    "web-prod":  { "app": "web",  "workspace": "D:/work/my-web",   "...": "..." },
-    "api-prod":  { "app": "api",  "workspace": "D:/work/my-api",   "...": "..." },
-    "game-stage":{ "app": "game", "workspace": "D:/work/game",     "...": "..." }
+    "web-prod":    { "server": "prod",    "app": "web", "workspace": "C:/work/my-web" },
+    "api-prod":    { "server": "prod",    "app": "api", "workspace": "C:/work/my-api" },
+    "web-staging": { "server": "staging", "app": "web", "workspace": "C:/work/my-web" }
   }
 }
 ```
+
+三层含义：
+
+- `servers` 是**机器清单**：连接信息写一次，多个项目共用。
+- `profiles` 是**可发布的项目**：`server` 指向用哪台机器，`app` 是那台机器 `deployer.json` 里的应用 id，`workspace` 是默认打包目录。
+- 控制台右上角的「服务器」下拉就是 `servers` 的键。选中某台机器后，同一个项目会连到那台机器上同名 `app` 去发布，所以**同一份代码可以推到测试机和正式机**，不用配两份档案。
+
+档案解析是「项目内 `config/deploy-profiles.json` + 用户级 `~/.airlock/deploy-profiles.json` 合并」，`servers` 和 `profiles` 都合并，同名以项目内为准。引用了不存在的服务器会直接报错，不会退回到别的机器上发布。
+
+老格式也还能用——不写 `servers`、直接把 `host`/`deployerCommand` 内联在 profile 里即可，会被解析成只有一台服务器的表。内联字段优先于 `server` 引用，所以可以拿一台机器当模板再局部覆盖。
 
 也可以用环境变量 `AIRLOCK_DEPLOY_PROFILES` 内联整张表。
 

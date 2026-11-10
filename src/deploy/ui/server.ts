@@ -14,7 +14,7 @@ import { promisify } from 'node:util';
 import { packRelease } from '../local.ts';
 import { DeployError } from '../errors.ts';
 import { createDeployClient, type DeployClient } from '../client.ts';
-import type { DeployProfile } from '../contracts.ts';
+import type { DeployProfile, DeployServer } from '../contracts.ts';
 import { renderPage } from './page.ts';
 
 const execFileAsync = promisify(execFile);
@@ -30,7 +30,11 @@ export interface UiProject {
 
 export interface UiOptions {
   readonly projects: readonly UiProject[];
+  /** 所有可选服务器（档案里的 servers 段）。控制台右上角切换。 */
+  readonly servers?: Record<string, DeployServer>;
   readonly defaultProject: string;
+  /** 默认选中的服务器名；不给就用项目档案自己的连接。 */
+  readonly defaultServer?: string;
   readonly token: string;
   readonly port?: number;
   /** 可写回的档案文件路径；为空时「添加项目」不可用（例如档案来自内联 JSON）。 */
@@ -307,14 +311,40 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
     return project;
   }
 
-  /** 每个项目一个客户端；不同项目可能连不同服务器，不能复用。 */
-  function clientFor(project: UiProject): DeployClient {
-    let client = clients.get(project.name);
+  /**
+   * 同一个项目可以发到不同服务器：只换连接信息，应用 id 跟项目走。
+   * 不传服务器名就用项目档案自己那份（老档案没有 servers 段时就是这条路）。
+   */
+  function serverProfile(project: UiProject, serverId: unknown): DeployProfile {
+    const key = typeof serverId === 'string' ? serverId.trim() : '';
+    if (key === '') return project.profile;
+    const server = options.servers?.[key];
+    if (server === undefined) {
+      const known = Object.keys(options.servers ?? {}).join(', ') || '（空）';
+      throw new DeployError('INVALID_REQUEST', `未知服务器：${key}。已配置：${known}`);
+    }
+    return { ...server, app: project.app };
+  }
+
+  /** 客户端按「项目 + 服务器」缓存：同一台机器同一账号才能复用。 */
+  function clientFor(project: UiProject, serverId?: unknown): DeployClient {
+    const profile = serverProfile(project, serverId);
+    const cacheKey = `${project.name}@${profile.host}:${profile.user ?? ''}:${profile.port ?? 22}`;
+    let client = clients.get(cacheKey);
     if (client === undefined) {
-      client = createDeployClient({ profile: project.profile });
-      clients.set(project.name, client);
+      client = createDeployClient({ profile });
+      clients.set(cacheKey, client);
     }
     return client;
+  }
+
+  function serverSummary() {
+    return Object.entries(options.servers ?? {}).map(([id, server]) => ({
+      id,
+      host: server.host,
+      user: server.user ?? null,
+      serverId: server.serverId ?? null,
+    }));
   }
 
   function projectSummary() {
@@ -327,8 +357,8 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
     }));
   }
 
-  async function handleOverview(project: UiProject, response: ServerResponse): Promise<void> {
-    const client = clientFor(project);
+  async function handleOverview(project: UiProject, serverId: unknown, response: ServerResponse): Promise<void> {
+    const client = clientFor(project, serverId);
     const [status, list, git, dirty] = await Promise.all([
       client.call({ op: 'status', app: project.app }).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
       client.call({ op: 'list', app: project.app }).catch(() => null),
@@ -347,6 +377,8 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
       ok: true,
       project: project.name,
       projects: projectSummary(),
+      servers: serverSummary(),
+      selectedServer: typeof serverId === 'string' ? serverId : '',
       app: project.app,
       workspace: project.workspace,
       candidates: listCandidates(project.workspace),
@@ -374,7 +406,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
     }
     const source = typeof body.source === 'string' && body.source.trim() !== '' ? body.source.trim() : project.workspace;
     const version = typeof body.version === 'string' && body.version.trim() !== '' ? body.version.trim() : undefined;
-    const client = clientFor(project);
+    const client = clientFor(project, body.server);
     releaseInFlight = true;
     try {
       const packed = await packRelease({ sourceDir: source, ...(version === undefined ? {} : { version }) });
@@ -402,7 +434,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
     }
     const to = typeof body.to === 'string' && body.to.trim() !== '' ? body.to.trim() : undefined;
     const restoreBackup = body.restoreBackup === true;
-    const client = clientFor(project);
+    const client = clientFor(project, body.server);
     releaseInFlight = true;
     try {
       const result = await client.call({
@@ -442,7 +474,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
       }
 
       if (request.method === 'GET' && url.pathname === '/api/overview') {
-        await handleOverview(resolveProject(url.searchParams.get('project')), response);
+        await handleOverview(resolveProject(url.searchParams.get('project')), url.searchParams.get('server'), response);
         return;
       }
       if (request.method === 'POST' && url.pathname === '/api/pick-folder') {
@@ -459,7 +491,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
       if (request.method === 'GET' && url.pathname === '/api/server-ls') {
         const project = resolveProject(url.searchParams.get('project'));
         const target = url.searchParams.get('path');
-        const listing = await clientFor(project).call({
+        const listing = await clientFor(project, url.searchParams.get('server')).call({
           op: 'list-dir',
           app: project.app,
           ...(target === null || target.trim() === '' ? {} : { params: { path: target.trim() } }),
@@ -472,7 +504,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
         const project = resolveProject(body.project);
         const root = typeof body.root === 'string' ? body.root.trim() : '';
         if (root === '') throw new DeployError('INVALID_REQUEST', '需要目标目录');
-        const updated = await clientFor(project).call({ op: 'set-root', app: project.app, params: { root } });
+        const updated = await clientFor(project, body.server).call({ op: 'set-root', app: project.app, params: { root } });
         json(response, 200, { ok: true, ...(updated as Record<string, unknown>) });
         return;
       }
