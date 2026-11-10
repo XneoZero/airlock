@@ -13,6 +13,38 @@
 两者共用同一种传输形态（SSH + 一行 JSON），但协议、配置、权限完全分开。想只给发布权限、
 不给改文件权限，就只部署 deployer。
 
+## 准备服务器（一次性，需要管理员）
+
+部署账号和你的运维/RDP 账号必须是两个身份，否则「SSH 一连上来就把 3389 图形会话挤掉」这类问题
+永远存在（Windows 的 `fSingleSessionPerUser=1`）。默认建一个 `ag-ssh`，名字可改：
+
+```powershell
+# 在服务器上，管理员 PowerShell
+.\scripts\provision-windows.ps1 -PublicKey 'ssh-ed25519 AAAA... your-key' -AccountName ag-ssh
+```
+
+脚本做五件事，重复跑不会重复建：
+
+1. 建本地用户（随机密码、永不过期、只能 key 登录），**不加进 Administrators**
+2. 建本地组 `airlock-deploy`，把账号加进去
+3. 建 `C:\airlock\{bin,config,apps}`，给这个组「修改」权限（不是完全控制，避免自己改 ACL）
+4. 把公钥写进 `C:\Users\ag-ssh\.ssh\authorized_keys` 并收紧 ACL
+5. 往 `sshd_config` 追加 `Match User ag-ssh` + `ForceCommand C:\airlock\bin\deploy.cmd`，
+   禁用 PTY/转发；**先备份、用 `sshd -t` 校验、校验失败自动还原**
+
+`deploy.cmd` 是个两行包装：调用 `node C:\airlock\bin\airlock-deployer.mjs --config C:\airlock\config\deployer.json`。
+Windows 的 `ForceCommand` 会交给 `cmd.exe` 解析，路径里有空格（`C:\Program Files\nodejs`）时
+直接写容易翻车，包一层 `.cmd` 最稳。
+
+> 本机侧要改的只有一处：`config/deploy-profiles.json` 里的 `user` 字段。账号叫什么、几台服务器
+> 各用什么账号，全在档案里配，代码里没有硬编码。
+
+Linux 上这一步等价于在 `~/.ssh/authorized_keys` 那行前面加前缀，不需要改 sshd_config：
+
+```
+restrict,command="/usr/bin/node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json" ssh-ed25519 AAAA...
+```
+
 ## 服务器目录布局
 
 每个应用一个根目录，工具只动它下面的这些位置：
