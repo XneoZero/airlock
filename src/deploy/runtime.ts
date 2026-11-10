@@ -41,13 +41,18 @@ export function runCommand(options: RunOptions): Promise<RunResult> {
   const { command } = options;
   const cwd = options.cwdOverride ?? resolveCwd(options.root, command.cwd);
   const timeoutMs = command.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  // Windows + Node 的坑：可执行文件路径用正斜杠时，cmd.exe 这类宿主会报「命令语法不正确」。
+  // 只规范化 command 本身（路径），不动 args —— 参数里可能有 URL 之类必须保留正斜杠的值。
+  const executable = process.platform === 'win32'
+    ? command.command.replace(/\//g, '\\')
+    : command.command;
   return new Promise<RunResult>((done) => {
     let stdout = '';
     let stderr = '';
     let timedOut = false;
     let child;
     try {
-      child = spawn(command.command, command.args ?? [], {
+      child = spawn(executable, command.args ?? [], {
         cwd,
         shell: false,
         windowsHide: true,

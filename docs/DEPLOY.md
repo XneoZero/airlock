@@ -115,6 +115,68 @@ restrict,command="/usr/bin/node /opt/airlock/bin/airlock-deployer.mjs --config /
 
 命令对象里的 `cwd` 只能是 `current` 或 `root`，不接受任意路径——否则路径注入面又打开了。
 
+## Windows 裸进程托管：四个真机才暴露的坑
+
+这四条是 2026-11-10 在 Windows Server 2025 上跑真机发布时踩出来的，本机隔离测试全部通过也发现不了。
+
+**1. 进程会被 SSH 会话带走。**
+用 `Start-Process` 启动的服务，SSH 一断就被回收（sshd 用 job object 清理进程树）。表现很迷惑：
+发布时健康检查 `HTTP 200` 通过，发布结束几秒后端口就没了。本机测试用的是同步命令，进程活在
+测试函数里，所以永远看不到这一层。
+
+解决：用 Task Scheduler 启动，进程归属调度器而不是 SSH 会话。
+
+```cmd
+@echo off
+schtasks /create /tn myapp-start /tr "C:\nodejs\node.exe C:\apps\myapp\current\server.mjs" /sc once /st 00:00 /ru SYSTEM /f >nul 2>&1
+if errorlevel 1 exit /b 2
+schtasks /run /tn myapp-start >nul 2>&1
+exit /b %errorlevel%
+```
+
+**2. 非管理员账号起不了会话外进程。**
+`ag-ssh` 这类受限账号调用 `Win32_Process.Create` 会直接「拒绝访问」，`Start-Process` 又会被清理。
+所以「最小权限部署账号 + 裸进程托管」在 Windows 上必须**预注册**：管理员建一次任务或服务，
+agent 只负责触发。想让 agent 自己起进程，它就只能是管理员——这是 Windows 的边界，不是工具的。
+
+**3. 可执行文件路径别用正斜杠。**
+`C:/Windows/System32/cmd.exe` 交给 `spawn` 时，`cmd.exe` 会报「命令语法不正确」。工具已经把
+`command` 里的 `/` 归一成 `\`，但配置里直接写反斜杠更省事。注意只规范化命令本身，`args` 里
+带 URL 的值不会被改。
+
+**4. `.cmd` 必须是 CRLF。**
+用 LF 换行的批处理，`cmd.exe` 同样报「命令语法不正确」。Windows 上的 `.cmd`/`.bat` 一律 CRLF + ASCII。
+
+一个能用的最小应用的启动脚本（`start.cmd`，放 `C:\airlock\bin\`，不随版本发布）：
+
+```cmd
+@echo off
+schtasks /create /tn myapp-start /tr "C:\nodejs\node.exe C:\airlock\apps\myapp\current\server.mjs" /sc once /st 00:00 /ru SYSTEM /f >nul 2>&1
+if errorlevel 1 exit /b 2
+schtasks /run /tn myapp-start >nul 2>&1
+if errorlevel 1 exit /b 3
+exit /b 0
+```
+
+对应的 `stop.ps1`（读应用根的 `app.pid` 杀进程）：
+
+```powershell
+$pidFile = 'app.pid'
+if (-not (Test-Path $pidFile)) { exit 0 }
+$target = [int]((Get-Content $pidFile -Raw).Trim())
+Stop-Process -Id $target -Force -ErrorAction SilentlyContinue
+Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+```
+
+应用自己负责把 pid 写到应用根。注意 `current` 是 junction，`import.meta.url` 拿到的是链接路径，
+要先 `realpathSync` 再往上退两级：
+
+```js
+const here = realpathSync(fileURLToPath(import.meta.url));
+const appRoot = join(dirname(here), '..', '..');  // releases/<ver> -> 应用根
+writeFileSync(join(appRoot, 'app.pid'), String(process.pid));
+```
+
 ## SSH 门禁
 
 和 broker 一样，用 `ForceCommand` 或 `authorized_keys` 的 `command=` 把它钉死：
@@ -236,17 +298,21 @@ node bin/airlock-deploy.mjs logs --app web --lines 50
 
 ## 已验证 / 未验证
 
-已验证（本机隔离测试 + 真实进程端到端）：
+已验证（本机隔离测试 + 真实服务器）：
 
 - 打包与解包、摘要一致性、路径穿越与展开上限拒绝（`test/deploy-archive.test.mjs`）
 - 协议行与二进制混读、跨 chunk 边界（`test/deploy-protocol.test.mjs`）
 - install / activate / rollback / 自动回退 / 版本冲突 / 数据备份恢复（`test/deploy-ops.test.mjs`）
-- 起真实 `airlock-deployer.mjs` 进程，走真实协议跑完发布、回滚、失败回退
+- 命令执行、超时、Windows 正斜杠路径、健康检查 URL/命令探针（`test/deploy-runtime.test.mjs`）
+- **真机（Windows Server 2025 / Node 24.22 / OpenSSH）**：`provision-windows.ps1` 建账号、
+  `ForceCommand` 门禁生效（受限账号只能跑 deployer）、发布 v1、发布 v2 平滑切换、
+  发坏版本触发 `HEALTH_FAILED` 并自动切回、手动 `rollback` 回上一版、
+  `state.json` 历史与 `deploy.log` 记录正确
 
 未验证：
 
-- 真实 sshd 的 `ForceCommand` 链路（本机用直接调用 deployer 代替）
-- Linux 符号链接与 Windows junction 之外的特殊挂载（网络盘、只读卷）
+- 真实服务器的 Linux 分支（`symlink` + systemd），本机是 Windows，只验了 junction
 - 大包（几百 MB）在慢链路下的传输稳定性
 - 多应用并发发布（工具不提供锁，靠运维约定）
-- 带数据库迁移的回滚（本工具只管文件，迁移脚本与 schema 兼容要自己保证）
+- 带数据库迁移的回滚（本工具只管文件，migration/schema 兼容要自己保证）
+- 受限账号在 Windows 上完整托管裸进程（需预注册任务或服务，见上面第 2 条）
