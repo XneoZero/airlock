@@ -1,0 +1,42 @@
+{
+  "name": "airlock",
+  "version": "0.1.0",
+  "description": "A capability airlock for agents: a narrow, auditable SSH channel to a server workspace.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "airlock": "bin/airlock.mjs",
+    "airlock-mcp": "bin/airlock-mcp.mjs",
+    "airlock-broker": "bin/airlock-broker.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:auto": "node --test",
+    "typecheck": "tsc --noEmit",
+    "cli": "node bin/airlock.mjs",
+    "mcp": "node bin/airlock-mcp.mjs"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "ssh",
+    "agent",
+    "remote-development",
+    "capability-broker"
+  ],
+  "license": "MIT"
+}
