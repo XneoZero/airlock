@@ -1,0 +1,25 @@
+{
+  "default": "prod",
+  "profiles": {
+    "prod": {
+      "host": "ssh.example.com",
+      "user": "airlock-deploy",
+      "port": 22,
+      "identityFile": "C:/Users/you/.ssh/airlock-deploy",
+      "userKnownHostsFile": "C:/Users/you/.ssh/known_hosts",
+      "hostKeyChecking": "yes",
+      "serverId": "srv-prod01",
+      "deployerCommand": "node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json",
+      "workspace": "C:/work/my-web"
+    },
+    "staging": {
+      "host": "10.0.0.12",
+      "user": "deploy",
+      "identityFile": "C:/Users/you/.ssh/airlock-staging",
+      "hostKeyChecking": "accept-new",
+      "serverId": "srv-stage01",
+      "deployerCommand": "node /opt/airlock/bin/airlock-deployer.mjs --config /etc/airlock/deployer.json",
+      "workspace": "C:/work/my-web"
+    }
+  }
+}

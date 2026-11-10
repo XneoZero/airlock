@@ -1,0 +1,42 @@
+{
+  "serverId": "srv-prod01",
+  "kind": "linux",
+  "maxArchiveBytes": 536870912,
+  "apps": {
+    "web": {
+      "root": "/srv/apps/web",
+      "keepReleases": 5,
+      "runtime": {
+        "start": { "command": "node", "args": ["server.mjs"], "cwd": "current", "timeoutMs": 20000 },
+        "stop": { "command": "node", "args": ["scripts/stop.mjs"], "cwd": "current", "timeoutMs": 20000 },
+        "status": { "command": "node", "args": ["scripts/status.mjs"], "cwd": "current", "timeoutMs": 10000 }
+      },
+      "health": {
+        "url": "http://127.0.0.1:3000/health",
+        "expectStatus": 200,
+        "timeoutMs": 30000,
+        "intervalMs": 500
+      },
+      "install": { "command": "npm", "args": ["ci", "--omit=dev"], "timeoutMs": 300000 },
+      "backupPaths": ["shared/data", "shared/config"],
+      "keepBackups": 5,
+      "restoreBackupOnRollback": false
+    },
+    "game": {
+      "root": "C:/srv/games/arena",
+      "keepReleases": 8,
+      "runtime": {
+        "start": { "command": "C:/srv/games/arena/current/ArenaServer.exe", "args": ["-batchmode"], "cwd": "current", "timeoutMs": 60000 },
+        "stop": { "command": "C:/Windows/System32/taskkill.exe", "args": ["/IM", "ArenaServer.exe", "/F"], "cwd": "root", "timeoutMs": 30000 }
+      },
+      "health": {
+        "command": { "command": "C:/srv/games/arena/tools/probe.exe", "args": ["--port", "7777"], "cwd": "root", "timeoutMs": 5000 },
+        "timeoutMs": 60000,
+        "intervalMs": 1000
+      },
+      "backupPaths": ["shared/saves", "shared/config"],
+      "keepBackups": 10,
+      "restoreBackupOnRollback": true
+    }
+  }
+}

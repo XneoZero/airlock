@@ -9,16 +9,21 @@
   "bin": {
     "airlock": "bin/airlock.mjs",
     "airlock-mcp": "bin/airlock-mcp.mjs",
-    "airlock-broker": "bin/airlock-broker.mjs"
+    "airlock-broker": "bin/airlock-broker.mjs",
+    "airlock-deploy": "bin/airlock-deploy.mjs",
+    "airlock-deploy-mcp": "bin/airlock-deploy-mcp.mjs",
+    "airlock-deployer": "bin/airlock-deployer.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "test:auto": "node --test",
     "typecheck": "tsc --noEmit",
     "cli": "node bin/airlock.mjs",
-    "mcp": "node bin/airlock-mcp.mjs"
+    "mcp": "node bin/airlock-mcp.mjs",
+    "deploy": "node bin/airlock-deploy.mjs"
   },
   "dependencies": {
+    "tar": "^7.5.22",
     "zod": "^4.6.7"
   },
   "devDependencies": {

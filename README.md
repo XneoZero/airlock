@@ -123,6 +123,36 @@ node bin/airlock.mjs mcp          # 或 AIRLOCK_PROFILE=dev node bin/airlock-mcp
 `remote_git_status` / `remote_git_diff` / `remote_check` / `remote_job_status` /
 `remote_job_cancel` / `remote_release_request`。
 
+## 发布通道：本地构建 → 发到服务器 → 起不来就回滚
+
+除了「改服务器上的文件」，Airlock 还有第二个通道：把本地已经构建好的目录推上服务器，
+按版本目录 + `current` 链接切换，起不来自动回退。完整说明见 [docs/DEPLOY.md](docs/DEPLOY.md)。
+
+```bash
+npm run build && npm test                                        # 本地自己验证
+node bin/airlock-deploy.mjs release --app web --source ./dist    # 打包 → 上传 → 切版本 → 重启 → 探活
+node bin/airlock-deploy.mjs rollback --app web                   # 切回上一版
+node bin/airlock-deploy.mjs status --app web --probe             # 现在跑的是什么、健康不健康
+```
+
+服务器侧目录：
+
+```
+/srv/apps/web/
+├── releases/<版本>/        每次发布一个目录
+├── current -> releases/…   正在跑的版本
+├── backups/                发布前数据快照（可选）
+├── state.json              当前版本 + 历史
+└── deploy.log
+```
+
+三条与 remote-dev 一致的设计纪律：请求侧只提交「应用 id + 版本号 + 归档」，
+命令与路径全部来自服务器本地配置；包解压后重算摘要，对不上就整包作废；
+切换版本前后都落 `state.json` 与日志，失败如实写 `failed`。
+
+支持 Linux / Windows（符号链接与 junction 自动选择）。托管的进程既可以是 systemd / Windows 服务，
+也可以是裸进程——`start` / `stop` / 健康检查由配置里预注册的命令负责，工具不猜。
+
 ## 安全模型
 
 1. **路径**：先过语法白名单（拒绝绝对路径、`..`、NUL），再 `resolve` + 带分隔符的前缀比较，
@@ -145,7 +175,9 @@ node bin/airlock.mjs mcp          # 或 AIRLOCK_PROFILE=dev node bin/airlock-mcp
 src/contracts/        协议契约（zod schema、错误码）
 src/transports/remote-dev/   Broker / client / 协议 / 工作区 / 任务 / MCP
 src/transports/host-runtime/ systemd / Windows service 的预注册动作
-bin/                  CLI、MCP 入口、服务器侧 Broker
+src/deploy/           发布通道：归档校验、版本状态、启停探活、deployer、CLI 编排
+bin/                  CLI、MCP 入口、服务器侧 Broker 与 deployer
+docs/DEPLOY.md        发布通道的配置、回滚语义与验证范围
 test/                 隔离测试（临时目录 + 本机 node 进程）
 ```
 
@@ -165,8 +197,10 @@ npm run typecheck
 
 - 已用隔离测试覆盖：协议编解码、Broker 路径/CAS/租约/任务白名单、客户端超时与错误码、
   工作区写入原子性与符号链接拒绝、宿主动作白名单。
+- 发布通道已覆盖：打包与摘要一致性、路径穿越与展开上限、协议行/二进制混读、
+  install/activate/rollback、激活失败自动回退、数据备份恢复；并用真实 deployer 进程端到端跑通。
 - 未验证：真实服务器的 sshd `ForceCommand` 链路、跨平台（Windows OpenSSH）专项、
-  多客户端并发、发布执行侧。
+  多客户端并发、大包在慢链路下的传输稳定性、带数据库迁移的回滚。
 
 ## 许可
 
