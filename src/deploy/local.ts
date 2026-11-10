@@ -6,9 +6,9 @@
  */
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, stat } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { deployProfileTableSchema, type DeployProfile } from './contracts.ts';
 import { packProject, type TreeManifest } from './archive.ts';
@@ -17,7 +17,33 @@ import { DeployError } from './errors.ts';
 const PROFILE_ENV = 'AIRLOCK_DEPLOY_PROFILES';
 const PROFILE_FILE_ENV = 'AIRLOCK_DEPLOY_PROFILES_FILE';
 const PROFILE_FILE = 'config/deploy-profiles.json';
+/** 用户级档案：这台机器上配过的所有项目，和仓库里的 config/ 合并。 */
+const HOME_PROFILE_FILE = join(homedir(), '.airlock', 'deploy-profiles.json');
 const execFileAsync = promisify(execFile);
+
+type ProfileTable = { default?: string; profiles: Record<string, DeployProfile> };
+
+function readProfileTableFile(path: string): { table: ProfileTable; baseDir: string } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    throw new DeployError('INVALID_REQUEST', `档案文件不可读或不是 JSON：${path}`);
+  }
+  const parsed = deployProfileTableSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new DeployError('INVALID_REQUEST', `档案不符合契约（${path}）：${issue?.path.join('.') ?? ''} ${issue?.message ?? ''}`.trim());
+  }
+  return { table: parsed.data, baseDir: dirname(path) };
+}
+
+/** 相对 workspace 按它自己那份档案所在目录解析，合并后才不会互相串味。 */
+function absolutizeWorkspace(profile: DeployProfile, baseDir: string): DeployProfile {
+  const workspace = profile.workspace;
+  if (workspace === undefined || isAbsolute(workspace)) return profile;
+  return { ...profile, workspace: resolve(baseDir, workspace) };
+}
 
 export interface LoadedProfile {
   readonly name: string;
@@ -31,9 +57,11 @@ export interface LoadedProfile {
  *   1. 显式 `--profiles <文件>`
  *   2. `AIRLOCK_DEPLOY_PROFILES_FILE` 指向的文件（适合全局放一份、所有项目共用）
  *   3. `AIRLOCK_DEPLOY_PROFILES` 内联 JSON
- *   4. 当前目录的 `config/deploy-profiles.json`
+ *   4. `~/.airlock/deploy-profiles.json` 与当前目录的 `config/deploy-profiles.json` **合并**
  *
  * 优先级这样排的原因：显式参数 > 环境变量 > 约定位置，避免「明明指定了却读到别处」。
+ * 两份约定位置合并而不是二选一：用户级放「我配过的所有项目」，仓库里那份放「这个仓库固定的项目」，
+ * 谁都不该把对方盖掉。同名档案以仓库里的为准（离当前项目更近的那份更具体）。
  */
 /**
  * 读整张档案表。控制台需要列出所有项目，所以解析逻辑单独抽出来，loadProfile 复用它。
@@ -62,16 +90,28 @@ export function loadProfileTable(profilesPath?: string): { table: { default?: st
     }
     source = PROFILE_ENV;
   } else {
-    const path = resolve(PROFILE_FILE);
-    try {
-      raw = JSON.parse(readFileSync(path, 'utf8'));
-      baseDir = dirname(path);
-    } catch {
+    const localPath = resolve(PROFILE_FILE);
+    const layers = [HOME_PROFILE_FILE, localPath]
+      .filter(path => existsSync(path))
+      .map(path => readProfileTableFile(path));
+    if (layers.length === 0) {
       throw new DeployError(
         'INVALID_REQUEST',
-        `没有可用的档案：${PROFILE_FILE} 不存在或不是 JSON。配好 config/deploy-profiles.json，或用 --profiles <文件> / ${PROFILE_FILE_ENV} 指定，或设置 ${PROFILE_ENV}`,
+        `没有可用的档案：${PROFILE_FILE} 与 ~/.airlock/deploy-profiles.json 都不存在。配好其中一份，或用 --profiles <文件> / ${PROFILE_FILE_ENV} 指定，或设置 ${PROFILE_ENV}`,
       );
     }
+    const merged: Record<string, DeployProfile> = {};
+    for (const layer of layers) {
+      for (const [name, profile] of Object.entries(layer.table.profiles)) {
+        merged[name] = absolutizeWorkspace(profile, layer.baseDir);
+      }
+    }
+    const nearest = layers[layers.length - 1];
+    const defaultName = nearest?.table.default ?? layers[0]?.table.default;
+    raw = { ...(defaultName === undefined ? {} : { default: defaultName }), profiles: merged };
+    baseDir = nearest?.baseDir ?? process.cwd();
+    // 「添加项目」写回离当前项目最近的那份，不污染用户级。
+    source = existsSync(localPath) ? localPath : HOME_PROFILE_FILE;
   }
   const parsed = deployProfileTableSchema.safeParse(raw);
   if (!parsed.success) {
