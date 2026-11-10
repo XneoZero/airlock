@@ -6,7 +6,8 @@ rem %CD% is the version dir, because deployer.json sets "cwd": "current" for thi
 rem command. Using %CD% instead of an absolute path means changing the app root
 rem (the "root" field) needs no edit here.
 rem
-rem Replace <app> with the app id from deployer.json.
+rem Replace <app> with the app id from deployer.json, and replace the node path
+rem below with the real one on your box (run: where node).
 set APP=<app>
 schtasks /create /tn airlock-%APP%-start /tr "C:\nodejs\node.exe %CD%\server.mjs" /sc once /st 00:00 /ru SYSTEM /f >nul 2>&1
 if errorlevel 1 exit /b 2
