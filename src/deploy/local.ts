@@ -15,6 +15,7 @@ import { packProject, type TreeManifest } from './archive.ts';
 import { DeployError } from './errors.ts';
 
 const PROFILE_ENV = 'AIRLOCK_DEPLOY_PROFILES';
+const PROFILE_FILE_ENV = 'AIRLOCK_DEPLOY_PROFILES_FILE';
 const PROFILE_FILE = 'config/deploy-profiles.json';
 const execFileAsync = promisify(execFile);
 
@@ -25,12 +26,32 @@ export interface LoadedProfile {
   readonly baseDir: string;
 }
 
-export function loadProfile(name?: string): LoadedProfile {
+/**
+ * 档案来源优先级（从高到低）：
+ *   1. 显式 `--profiles <文件>`
+ *   2. `AIRLOCK_DEPLOY_PROFILES_FILE` 指向的文件（适合全局放一份、所有项目共用）
+ *   3. `AIRLOCK_DEPLOY_PROFILES` 内联 JSON
+ *   4. 当前目录的 `config/deploy-profiles.json`
+ *
+ * 优先级这样排的原因：显式参数 > 环境变量 > 约定位置，避免「明明指定了却读到别处」。
+ */
+export function loadProfile(name?: string, profilesPath?: string): LoadedProfile {
+  const explicitPath = profilesPath ?? process.env[PROFILE_FILE_ENV];
   const inline = process.env[PROFILE_ENV];
   let raw: unknown;
   let baseDir = process.cwd();
   let source = PROFILE_FILE;
-  if (inline !== undefined && inline.trim() !== '') {
+
+  if (explicitPath !== undefined && explicitPath.trim() !== '') {
+    const path = resolve(explicitPath.trim());
+    try {
+      raw = JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      throw new DeployError('INVALID_REQUEST', `档案文件不可读或不是 JSON：${path}`);
+    }
+    baseDir = dirname(path);
+    source = path;
+  } else if (inline !== undefined && inline.trim() !== '') {
     try {
       raw = JSON.parse(inline);
     } catch {
@@ -43,7 +64,10 @@ export function loadProfile(name?: string): LoadedProfile {
       raw = JSON.parse(readFileSync(path, 'utf8'));
       baseDir = dirname(path);
     } catch {
-      throw new DeployError('INVALID_REQUEST', `没有可用的档案：${PROFILE_FILE} 不存在或不是 JSON。先配好 config/deploy-profiles.json，或设置 ${PROFILE_ENV}`);
+      throw new DeployError(
+        'INVALID_REQUEST',
+        `没有可用的档案：${PROFILE_FILE} 不存在或不是 JSON。配好 config/deploy-profiles.json，或用 --profiles <文件> / ${PROFILE_FILE_ENV} 指定，或设置 ${PROFILE_ENV}`,
+      );
     }
   }
   const parsed = deployProfileTableSchema.safeParse(raw);

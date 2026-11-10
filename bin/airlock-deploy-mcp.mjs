@@ -27,12 +27,14 @@ function die(message, hint) {
 const argv = process.argv.slice(2);
 const profileIndex = argv.indexOf('--profile');
 const profileName = profileIndex >= 0 ? argv[profileIndex + 1] : (process.env.AIRLOCK_DEPLOY_PROFILE ?? undefined);
+const profilesIndex = argv.indexOf('--profiles');
+const profilesPath = profilesIndex >= 0 ? argv[profilesIndex + 1] : undefined;
 
 let loaded;
 try {
-  loaded = loadProfile(profileName);
+  loaded = loadProfile(profileName, profilesPath);
 } catch (error) {
-  die(error instanceof Error ? error.message : String(error), '先配好 config/deploy-profiles.json，或设置 AIRLOCK_DEPLOY_PROFILES');
+  die(error instanceof Error ? error.message : String(error), '配好 config/deploy-profiles.json，或设置 AIRLOCK_DEPLOY_PROFILES_FILE / AIRLOCK_DEPLOY_PROFILES');
 }
 
 const sourceDir = resolve(loaded.baseDir, loaded.profile.workspace ?? '.');

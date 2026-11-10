@@ -25,7 +25,9 @@ const USAGE = `用法：node bin/airlock-deploy.mjs <命令> [--app 名字] [--p
   rollback --app 名字 [--to 版本] [--restore-backup]
   logs     --app 名字 [--lines 50]
   mcp                                    给 MCP 客户端的 stdio 服务器
-档案：--profile 名字 / AIRLOCK_DEPLOY_PROFILE；表在 AIRLOCK_DEPLOY_PROFILES 或 config/deploy-profiles.json`;
+档案：--profile 名字 / AIRLOCK_DEPLOY_PROFILE
+      表：--profiles <文件> / AIRLOCK_DEPLOY_PROFILES_FILE（全局放一份，所有项目共用）
+          / AIRLOCK_DEPLOY_PROFILES（内联 JSON）/ config/deploy-profiles.json（当前目录）`;
 
 function fail(message, hint) {
   process.stderr.write(`[deploy] ${message}\n`);
@@ -33,7 +35,7 @@ function fail(message, hint) {
   process.exit(1);
 }
 
-const takesValue = new Set(['--app', '--profile', '--source', '--version', '--exclude', '--commit', '--to', '--lines', '--timeout']);
+const takesValue = new Set(['--app', '--profile', '--profiles', '--source', '--version', '--exclude', '--commit', '--to', '--lines', '--timeout']);
 
 function parseArgs(argv) {
   const options = { profile: process.env.AIRLOCK_DEPLOY_PROFILE ?? '', timeoutMs: undefined, probe: false, restoreBackup: false };
@@ -72,7 +74,7 @@ if (command === 'mcp') {
 } else {
   let loaded;
   try {
-    loaded = loadProfile(options.profile === '' ? undefined : options.profile);
+    loaded = loadProfile(options.profile === '' ? undefined : options.profile, options.profiles);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }

@@ -320,6 +320,76 @@ restrict,command="/usr/bin/node /opt/airlock/bin/airlock-deployer.mjs --config /
 
 `workspace` 是默认打包目录。也可以用环境变量 `AIRLOCK_DEPLOY_PROFILES` 内联整张表。
 
+## 在别的项目里使用
+
+Airlock 是独立工具，不是要复制进每个项目的库。三种用法，按推荐顺序：
+
+### 1. 全局安装（多项目，推荐）
+
+```powershell
+cd C:\Users\<user>\Desktop\Airlock
+npm link                      # 把 airlock-deploy 链接成全局命令
+
+# 档案只放一份，所有项目共用
+New-Item -ItemType Directory -Force $HOME\.airlock | Out-Null
+Copy-Item config\deploy-profiles.json $HOME\.airlock\deploy-profiles.json
+
+# 告诉工具去哪找档案（写进用户环境变量，新终端生效）
+[Environment]::SetEnvironmentVariable('AIRLOCK_DEPLOY_PROFILES_FILE', "$HOME\.airlock\deploy-profiles.json", 'User')
+```
+
+之后**在任何项目目录**里：
+
+```powershell
+airlock-deploy status --app web
+airlock-deploy release --app web --source .\dist
+airlock-deploy rollback --app web
+```
+
+### 2. 装进项目（团队共享，走 npm）
+
+```powershell
+cd D:\work\my-project
+npm install --save-dev file:C:\Users\<user>\Desktop\Airlock
+```
+
+`package.json` 加脚本，团队成员 `npm install` 后直接用：
+
+```json
+{
+  "scripts": {
+    "deploy": "airlock-deploy release --app web --source ./dist",
+    "deploy:rollback": "airlock-deploy rollback --app web"
+  }
+}
+```
+
+### 3. Vendor 进项目（不需要 Node 包管理）
+
+把 `bin/`、`src/`、`package.json`、`package-lock.json` 复制到项目的 `tools/airlock/`，
+然后直接调用：
+
+```powershell
+node tools/airlock/bin/airlock-deploy.mjs release --app web --source .\dist
+```
+
+什么时候选它：项目必须自带发布能力、或没有 npm/私有 registry 可用。
+代价是升级要手动同步——本项目 `src/` 有 1500+ 行，跟着业务仓库走会累。
+
+> **不建议把 `src/` 合并进项目源码树**。它是工具不是库，混进去会让项目的 `tsc`/`eslint`
+> 扫到无关文件，而且升级时容易冲突。要自带就放 `tools/airlock/`，保持边界清楚。
+
+### 档案放在哪
+
+| 场景 | 放法 | 怎么指定 |
+|---|---|---|
+| 单个项目 | 项目根 `config/deploy-profiles.json` | 默认自动读取（已被 `.gitignore` 忽略） |
+| 多项目共用一台服务器 | `~/.airlock/deploy-profiles.json` | `AIRLOCK_DEPLOY_PROFILES_FILE` 环境变量 |
+| 临时 / CI | 任意位置 | `AIRLOCK_DEPLOY_PROFILES` 内联 JSON，或 `--profiles <文件>` |
+| 一台服务器多个环境 | 一份表配 `prod` / `staging` | `--profile prod` 选 |
+
+优先级：`--profiles` > `AIRLOCK_DEPLOY_PROFILES_FILE` > `AIRLOCK_DEPLOY_PROFILES` > `config/deploy-profiles.json`。
+
 ## 日常操作
 
 ```bash
