@@ -186,6 +186,9 @@ Add-LocalGroupMember -Group 'Administrators' -Member 'ag-ssh'
 语义上有三条硬规则：
 
 1. **只改 `root`**，`runtime`、`health`、`backupPaths` 这些原样保留——换目录不等于换应用。
+   前提是 `start` 命令没有写死旧路径：用 `%CD%`（部署器给这条命令设的 `cwd` 是 `current`）
+   而不是绝对路径，改 root 就不用改脚本。模板见
+   [examples/windows/start-app.cmd](../examples/windows/start-app.cmd)。
 2. **旧目录里的版本不搬**。改完落点后新目录是空的，`current` 变成 `null`，必须重新发一版才会跑起来。迁移是老版本留原地、新版本进新目录，不做隐式搬家。
 3. **拒绝盘根与系统目录**。`C:\`、`C:\Windows`、`C:\Program Files`、`/etc`、`/usr`
    一律拒绝——这些地方建 `releases/` 会毁系统。
