@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit",
     "cli": "node bin/airlock.mjs",
     "mcp": "node bin/airlock-mcp.mjs",
-    "deploy": "node bin/airlock-deploy.mjs"
+    "deploy": "node bin/airlock-deploy.mjs",
+    "ui": "node bin/airlock-deploy-ui.mjs"
   },
   "dependencies": {
     "tar": "^7.5.22",
