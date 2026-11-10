@@ -122,6 +122,29 @@ Restart-Service sshd
 
 验证通过后 **一定记得删掉** `airlock-sshd-rollback`，否则 10 分钟后它会把你刚改好的配置还原回去。
 
+### 4. 受限账号的权限现实（Windows 裸进程）
+
+在 Windows 上，「**低权限部署账号**」和「**托管裸进程**」这两件事不能同时成立：
+
+- `Start-Process` 起的进程会被 sshd 用 job object 回收（见前文坑 1）
+- 换 `Win32_Process.Create`（CIM），普通用户直接「拒绝访问」
+- 用 `schtasks` 以 SYSTEM 运行任务，普通用户创建任务需要密码，且对别人创建的任务没有运行权限
+
+所以只有两条路：**给账号管理员权限**，或者**预注册任务/服务、账号只负责触发**。
+
+本项目的测试机选了前者（项目文档里称 A 方案）：
+
+```powershell
+Add-LocalGroupMember -Group 'Administrators' -Member 'ag-ssh'
+```
+
+代价要说清楚：**账号级隔离失效**，`ForceCommand` 成了唯一约束。能连上这个账号的人，
+虽然拿不到 shell，但可以通过「发布一份代码」的方式让服务器执行任意指令——因为发布通道
+本来就是「上传并执行」。这条风险不会因为 `PermitTTY no` 消失。
+
+生产环境建议走 C 方案：应用包成 Windows 服务（winsw/nssm），以独立的低权限账号运行，
+部署账号只负责切 `current` 和 `sc start/stop`。那时即使发布了恶意代码，也只是低权限进程。
+
 ## 服务器目录布局
 
 每个应用一个根目录，工具只动它下面的这些位置：
