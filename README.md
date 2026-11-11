@@ -203,6 +203,20 @@ airlock-deploy ui --app web
 
 平台相关的路径和措辞按运行控制台的操作系统生成，Windows / macOS / Linux 各按各的写。
 
+## 配合 agent 使用
+
+仓库带一份 DSH 技能：[`skills/airlock-deploy/SKILL.md`](skills/airlock-deploy/SKILL.md)。
+装到本机技能目录后，agent 遇到「发版 / 回滚 / 接新服务器」会自动加载它——里面是完整的
+操作流程、配置要点、失败模式对照表（13 类报错 → 原因 → 处理）和交付前自检清单。
+
+```bash
+mkdir -p ~/.dsh/skills/airlock-deploy
+cp skills/airlock-deploy/SKILL.md ~/.dsh/skills/airlock-deploy/
+```
+
+技能里刻意不写死任何路径和 IP，改用「先查再答」：`status` 返回的 `root`、`where airlock-deploy`、
+档案的实际来源。这样换机器、换账号都不用改技能。
+
 ## 安全模型
 
 1. **路径**：先过语法白名单（拒绝绝对路径、`..`、NUL），再 `resolve` + 带分隔符的前缀比较，
