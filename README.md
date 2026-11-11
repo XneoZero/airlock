@@ -194,6 +194,10 @@ node bin/airlock-deploy-ui.mjs         # 或直接跑仓库里的入口
 落点（`root`）可以直接在控制台改：点「落点」后面的「改」，走服务器端目录浏览器，
 默认停在管理员桌面。改完下一次请求就生效，旧目录里的版本不会自动搬过去。
 
+**Windows 上的默认落点就是管理员桌面**：`C:\Users\Administrator\Desktop\<应用id>`。
+`scripts\provision-windows.ps1` 在 `deployer.json` 缺省时按这个位置生成配置，
+并顺手把 ACL 授给部署组——部署账号读不到别人的 profile 目录，不授权第一次发布就会失败。
+
 ### 多项目与多服务器
 
 档案分三层：

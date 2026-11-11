@@ -163,6 +163,16 @@ ssh -i ~/.ssh/other_key ag-ssh@<IP> "echo leak"
 
 写 `C:\airlock\config\deployer.json`（参考 `examples/deployer.example.json`），关键三条：
 
+0. **落点默认放管理员桌面**：`C:\Users\Administrator\Desktop\<应用id>`。产物就在运维一登录
+   能直接看到的地方。但部署账号读不到别人的 profile 目录，所以必须同时授权：
+
+   ```powershell
+   icacls 'C:\Users\Administrator\Desktop\<应用id>' /grant 'airlock-deploy:(OI)(CI)M' /T
+   ```
+
+   `provision-windows.ps1` 在 `deployer.json` 不存在时会**按这个默认落点自动生成**
+   （含启停脚本），只有已有配置才不动它。
+
 1. **`runtime.start` 必须启动后就返回**——deployer 是短命进程，HTTP 服务不退出会把 start 卡到超时
 2. **命令路径用反斜杠**——`C:/Windows/System32/cmd.exe` 会让 cmd 报「命令语法不正确」
 3. **`health` 一定要配**——没有它，起不来的版本也会被当成发布成功
