@@ -140,6 +140,9 @@ export function renderPage(options: PageOptions): string {
                   line-height:1.5;resize:vertical}
   .row2{display:flex;gap:8px}
   .row2 select{flex:1}
+  dl.kv{display:grid;grid-template-columns:86px 1fr;gap:7px 14px;margin:12px 0 0;font-size:12.5px}
+  dl.kv dt{color:var(--dim);white-space:nowrap}
+  dl.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
 </style>
 </head>
 <body>
@@ -149,6 +152,7 @@ export function renderPage(options: PageOptions): string {
   <select id="server-select" title="部署到哪台服务器"></select>
   <div class="meta">
     <span>服务器 <b id="server">—</b></span>
+    <span>系统 <b id="os" class="copyable" title="点击查看操作系统详情">—</b></span>
     <span>落点 <b id="root" class="copyable" title="点击复制服务器上的目录">—</b><button type="button" id="btn-root" class="mini" title="改服务器上的发布目录">改</button></span>
     <span>当前版本 <b id="current">—</b></span>
     <span>一致性 <b id="consistent">—</b></span>
@@ -272,6 +276,17 @@ export function renderPage(options: PageOptions): string {
 </dialog>
 
 <div id="drop-veil">松开以添加这个文件夹</div>
+
+<dialog id="os-dlg">
+  <div class="body">
+    <h3>服务器操作系统</h3>
+    <dl class="kv" id="os-body"></dl>
+    <div class="hint" id="os-hint"></div>
+  </div>
+  <div class="foot">
+    <button type="button" class="primary" id="os-close">关闭</button>
+  </div>
+</dialog>
 
 <script>
 (function(){
@@ -421,6 +436,13 @@ export function renderPage(options: PageOptions): string {
         }
         q('app-name').textContent = d.app;
         q('server').textContent = d.server && d.server.serverId ? d.server.serverId : '不可达';
+        var osInfo = d.server && d.server.os ? d.server.os : null;
+        var osFallback = d.server && d.server.kind === 'windows' ? 'Windows'
+          : (d.server && d.server.kind === 'linux' ? 'Linux' : '—');
+        q('os').textContent = osInfo && osInfo.name ? osInfo.name : osFallback;
+        q('os').title = osInfo
+          ? '点击查看操作系统详情'
+          : '拿不到详情：服务器不可达，或服务器上的部署器还不支持 sysinfo';
         q('root').textContent = d.server && d.server.root ? d.server.root : '—';
         q('root').title = d.server && d.server.root
           ? '点击复制。releases/版本/ 放代码，current 指向在用版本，backups/ 放数据快照'
@@ -465,6 +487,37 @@ export function renderPage(options: PageOptions): string {
     var buttons = document.querySelectorAll('[data-rollback]');
     for (var i = 0; i < buttons.length; i++) buttons[i].disabled = value;
   }
+
+  // 操作系统详情：字段不多，但排障时每一行都可能是关键信息。
+  function showOs(os, kind){
+    var platformName = kind === 'windows' ? 'Windows' : (kind === 'linux' ? 'Linux' : (os.platform || '未知'));
+    var rows = [
+      ['系统', os.name || '未知'],
+      ['版本', os.version || '—'],
+      ['类型', platformName],
+      ['架构', os.arch || '—'],
+      ['内核', os.kernel || '—'],
+      ['主机名', os.hostname || '—'],
+      ['Node', os.node || '—']
+    ];
+    var html = '';
+    for (var i = 0; i < rows.length; i++){
+      html += '<dt>' + escapeHtml(rows[i][0]) + '</dt><dd>' + escapeHtml(rows[i][1]) + '</dd>';
+    }
+    q('os-body').innerHTML = html;
+    q('os-hint').textContent = '这些值由服务器上的部署器进程自己读取，只读，不执行任何命令。';
+    q('os-dlg').showModal();
+  }
+
+  q('os').addEventListener('click', function(){
+    var d = overviewData;
+    if (!d || !d.server || !d.server.os){
+      toast('拿不到操作系统信息：服务器不可达，或部署器版本过旧', 'err');
+      return;
+    }
+    showOs(d.server.os, d.server.kind);
+  });
+  q('os-close').addEventListener('click', function(){ q('os-dlg').close(); });
 
   q('btn-refresh').addEventListener('click', load);
 

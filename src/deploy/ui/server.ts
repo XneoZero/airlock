@@ -384,6 +384,26 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
     return client;
   }
 
+  /**
+   * 服务器系统信息。老版本 deployer 不认识 sysinfo，会回 INVALID_REQUEST——
+   * 这里统一折成 null，让前端退回只显示 linux/windows。
+   */
+  function osSummary(info: unknown): {
+    name: string | null; version: string | null; platform: string | null;
+    arch: string | null; kernel: string | null; hostname: string | null; node: string | null;
+  } | null {
+    if (typeof info !== 'object' || info === null) return null;
+    const raw = info as Record<string, unknown>;
+    const pick = (key: string): string | null => {
+      const value = raw[key];
+      return typeof value === 'string' && value !== '' ? value : null;
+    };
+    return {
+      name: pick('osName'), version: pick('osVersion'), platform: pick('platform'),
+      arch: pick('arch'), kernel: pick('kernel'), hostname: pick('hostname'), node: pick('node'),
+    };
+  }
+
   function serverSummary() {
     return Object.entries(servers).map(([id, server]) => ({
       id,
@@ -407,11 +427,13 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
   async function handleOverview(project: UiProject, serverId: unknown, response: ServerResponse): Promise<void> {
     const client = clientFor(project, serverId);
     // 不带 app 的 status 会返回这台机器上配置的所有应用——项目下拉要用它补全。
-    const [all, list, git, dirty] = await Promise.all([
+    const [all, list, git, dirty, info] = await Promise.all([
       client.call({ op: 'status' }).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
       client.call({ op: 'list', app: project.app }).catch(() => null),
       gitLog(project.workspace),
       gitStatus(project.workspace),
+      // 系统信息失败不影响主视图：老 deployer 直接不认识这个 op。
+      client.call({ op: 'sysinfo' }).catch(() => null),
     ]);
     const allData = all as { apps?: Array<Record<string, unknown>>; error?: string };
     const statusData = (allData.error !== undefined
@@ -446,6 +468,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
         ? {
             serverId: statusData.serverId ?? null,
             kind: statusData.kind ?? null,
+            os: osSummary(info),
             root: statusData.root ?? null,
             current: statusData.current ?? null,
             consistent: statusData.consistent ?? null,

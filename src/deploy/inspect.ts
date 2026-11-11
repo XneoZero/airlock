@@ -2,7 +2,8 @@
  * 只读视图：status / list / logs。这三个 op 不改任何状态，
  * 但都要如实区分「记录说是什么」和「磁盘上实际是什么」。
  */
-import { readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
+import { arch, hostname, release, version as osVersion } from 'node:os';
 import { join } from 'node:path';
 import { appIds, appOf, type DeployContext } from './context.ts';
 import { hasBackup } from './backup.ts';
@@ -108,3 +109,45 @@ export async function pruneReleases(ctx: DeployContext, appId: unknown, keepOver
   }
   return { app: appId, keep, removed, kept: [...keepers].sort() };
 }
+
+/**
+ * 服务器自己的系统信息：只读，不碰应用目录。
+ *
+ * `status` 里的 `kind` 只说 Linux/Windows，排障时不够用——「端口通了但服务没起来」
+ * 常常要先确认是不是同一台机器、是不是同一个 Node 版本。这些信息客户端拿不到，
+ * 只能由服务器侧报上来。
+ */
+async function readOsRelease(): Promise<{ id: string; version: string; pretty: string } | null> {
+  let text: string;
+  try {
+    text = await readFile('/etc/os-release', 'utf8');
+  } catch {
+    return null; // Windows 和极简镜像没有这个文件
+  }
+  const fields = new Map<string, string>();
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
+    if (match === null) continue;
+    fields.set(match[1]!, match[2]!.replace(/^"(.*)"$/, '$1'));
+  }
+  const pretty = fields.get('PRETTY_NAME') ?? fields.get('NAME');
+  if (pretty === undefined || pretty === '') return null;
+  return { id: fields.get('ID') ?? '', version: fields.get('VERSION_ID') ?? '', pretty };
+}
+
+export async function sysinfoOfServer(ctx: DeployContext): Promise<unknown> {
+  const distro = ctx.kind === 'linux' ? await readOsRelease() : null;
+  return {
+    serverId: ctx.config.serverId,
+    kind: ctx.kind,
+    platform: process.platform,
+    arch: arch(),
+    kernel: release(),
+    hostname: hostname(),
+    node: process.version,
+    // Windows 没有 os-release：退回内核版本，总比空着强。
+    osName: distro?.pretty ?? osVersion(),
+    osVersion: distro?.version ?? null,
+  };
+}
+

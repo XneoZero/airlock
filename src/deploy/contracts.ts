@@ -89,7 +89,7 @@ export const deployerConfigSchema = z.object({
 }).strict();
 export type DeployerConfig = z.infer<typeof deployerConfigSchema>;
 
-export const deployOps = ['status', 'list', 'install', 'activate', 'rollback', 'logs', 'list-dir', 'set-root'] as const;
+export const deployOps = ['status', 'list', 'install', 'activate', 'rollback', 'logs', 'list-dir', 'set-root', 'sysinfo'] as const;
 export type DeployOp = (typeof deployOps)[number];
 
 export const deployRequestSchema = z.object({
