@@ -1,5 +1,10 @@
 # Airlock
 
+[![CI](https://github.com/l1217974476/airlock/actions/workflows/ci.yml/badge.svg)](https://github.com/l1217974476/airlock/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/l1217974476/airlock)](https://github.com/l1217974476/airlock/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A5%2024-brightgreen)](package.json)
+
 **A capability airlock for agents.** Narrow, auditable SSH channels to a server —
 only registered operations pass, and every pass is logged.
 
@@ -64,6 +69,9 @@ npm install
 npm test            # 78 个测试，不连服务器、不读 config/
 npm run typecheck
 ```
+
+不想 clone：下 [Releases](https://github.com/l1217974476/airlock/releases) 里的 `airlock-0.1.0.tgz`，
+`npm i -g ./airlock-0.1.0.tgz` 直接装。
 
 想先看界面：双击 `airlock-ui.cmd`（或 `./airlock-ui.sh`），见 [控制台](#控制台)。
 
