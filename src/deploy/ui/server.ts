@@ -26,6 +26,8 @@ export interface UiProject {
   readonly app: string;
   readonly workspace: string;
   readonly profile: DeployProfile;
+  /** 档案里这个项目默认指向的服务器名；内联连接信息时为空。 */
+  readonly serverName?: string;
 }
 
 export interface UiOptions {
@@ -295,6 +297,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
         app,
         workspace: resolve(table.baseDir, profile.workspace ?? '.'),
         profile,
+        serverName: table.table.serverOf[name] ?? '',
       });
     }
     if (next.length > 0) {
@@ -397,6 +400,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
       workspace: project.workspace,
       serverId: project.profile.serverId ?? null,
       host: project.profile.host,
+      serverName: project.serverName === undefined || project.serverName === '' ? null : project.serverName,
     }));
   }
 

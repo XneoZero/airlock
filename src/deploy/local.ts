@@ -32,6 +32,8 @@ export type ResolvedProfileTable = {
   default?: string;
   servers: Record<string, DeployServer>;
   profiles: Record<string, DeployProfile>;
+  /** profile 名 → 它在档案里写的 server 名（内联连接信息时为 ''）。 */
+  serverOf: Record<string, string>;
 };
 
 function parseTable(raw: unknown, where: string): DeployProfileTable {
@@ -67,6 +69,7 @@ function absolutizeWorkspace<T extends { workspace?: string }>(profile: T, baseD
 function resolveProfiles(raw: DeployProfileTable, baseDir: string): ResolvedProfileTable {
   const servers = raw.servers ?? {};
   const profiles: Record<string, DeployProfile> = {};
+  const serverOf: Record<string, string> = {};
   for (const [name, input] of Object.entries(raw.profiles)) {
     const { server: serverKey, ...inline } = input;
     let base: DeployServer | undefined;
@@ -85,11 +88,13 @@ function resolveProfiles(raw: DeployProfileTable, baseDir: string): ResolvedProf
       );
     }
     profiles[name] = absolutizeWorkspace(merged as DeployProfile, baseDir);
+    serverOf[name] = serverKey === undefined ? '' : serverKey;
   }
   return {
     ...(raw.default === undefined ? {} : { default: raw.default }),
     servers,
     profiles,
+    serverOf,
   };
 }
 

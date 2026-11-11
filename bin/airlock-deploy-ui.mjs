@@ -80,6 +80,7 @@ for (const [name, profile] of Object.entries(table.table.profiles)) {
     app,
     workspace: resolve(table.baseDir, profile.workspace ?? '.'),
     profile,
+    serverName: table.table.serverOf[name] ?? '',
   });
 }
 if (skipped.length > 0) {

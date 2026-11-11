@@ -9,6 +9,8 @@ export interface PageProject {
   readonly workspace: string;
   readonly serverId: string | null;
   readonly host: string;
+  /** 档案里这个项目默认指向的服务器名（内联连接信息时为 null）。 */
+  readonly serverName: string | null;
 }
 
 export interface PageOptions {
@@ -288,6 +290,35 @@ export function renderPage(options: PageOptions): string {
   var busy = false;
   var overviewData = null;
 
+  // ---- 选择记忆：下次打开回到上次的项目与服务器 ----
+  var STORE_PROJECT = 'airlock.project';
+  var STORE_SERVER = 'airlock.server';
+
+  function recall(key){
+    try { return localStorage.getItem(key) || ''; } catch (error) { return ''; }
+  }
+  function remember(key, value){
+    try {
+      if (value) localStorage.setItem(key, value);
+      else localStorage.removeItem(key);
+    } catch (error) { /* 隐私模式下写不了，忽略 */ }
+  }
+  function projectDefaultServer(name){
+    for (var i = 0; i < PROJECTS.length; i++){
+      if (PROJECTS[i].name === name) return PROJECTS[i].serverName || '';
+    }
+    return '';
+  }
+
+  (function restoreSelection(){
+    var savedProject = recall(STORE_PROJECT);
+    for (var i = 0; i < PROJECTS.length; i++){
+      if (PROJECTS[i].name === savedProject){ currentProject = savedProject; break; }
+    }
+    // 服务器记忆可能指向已删除的机器，先按项目默认走；真失效了 load 里会退回。
+    currentServer = recall(STORE_SERVER) || projectDefaultServer(currentProject);
+  })();
+
   function q(id){ return document.getElementById(id); }
 
   function toast(text, kind){
@@ -407,8 +438,20 @@ export function renderPage(options: PageOptions): string {
         renderGit(d.git || [], d.gitStatus);
         renderReleases(d);
         q('log').textContent = (d.log && d.log.length) ? d.log.join('\\n') : '（暂无日志）';
+        // 到这里说明这次请求真的成功了，才把组合记下来。
+        remember(STORE_PROJECT, currentProject);
+        remember(STORE_SERVER, currentServer);
       })
-      .catch(function(error){ toast('读取失败：' + error.message, 'err'); })
+      .catch(function(error){
+        // 记忆里的服务器可能已经被删：退回项目默认再试一次，别让页面卡死在报错上。
+        if (currentServer && String(error.message).indexOf('未知服务器') >= 0){
+          currentServer = projectDefaultServer(currentProject);
+          remember(STORE_SERVER, currentServer);
+          load();
+          return;
+        }
+        toast('读取失败：' + error.message, 'err');
+      })
       .finally(function(){
         q('btn-refresh').disabled = false;
         q('btn-refresh').textContent = '刷新';
@@ -572,6 +615,9 @@ export function renderPage(options: PageOptions): string {
       return;
     }
     currentProject = value;
+    currentServer = projectDefaultServer(value);   // 切项目时跟它自己的默认目标机走
+    remember(STORE_PROJECT, currentProject);
+    remember(STORE_SERVER, currentServer);
     q('git-panel').innerHTML = '<div class="skel"></div><div class="skel"></div>';
     q('rel-panel').innerHTML = '<div class="skel"></div><div class="skel"></div>';
     q('log').textContent = '加载中…';
@@ -579,20 +625,28 @@ export function renderPage(options: PageOptions): string {
   });
 
   /**
-   * 服务器切换器：同一份代码可以发到不同机器。
-   * 空值表示「项目默认」——用项目档案自己写的那台，老档案只有一台时就是这样。
+   * 服务器下拉：同一份代码可以发到不同机器。只列真实服务器，不再有「项目默认」这一项。
+   * 记忆里的机器如果已被删掉，退回项目的默认服务器，再退到第一台。
    */
   function rebuildServerSelect(list, selected){
     var sel = q('server-select');
     if (!list || !list.length){ sel.style.display = 'none'; return; }
     sel.style.display = '';
-    var html = '<option value="">项目默认</option>';
+    var html = '';
+    var ids = [];
     for (var i = 0; i < list.length; i++){
       var s = list[i];
+      ids.push(s.id);
       html += '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.id) + ' · ' + escapeHtml(s.host) + '</option>';
     }
     html += '<option value="__add__">＋ 接入新服务器…</option>';
     sel.innerHTML = html;
+
+    if (ids.indexOf(selected) < 0){
+      selected = projectDefaultServer(currentProject);
+      if (ids.indexOf(selected) < 0) selected = ids[0];
+      currentServer = selected;
+    }
     sel.value = selected || '';
   }
 
@@ -604,6 +658,7 @@ export function renderPage(options: PageOptions): string {
       return;
     }
     currentServer = this.value;
+    remember(STORE_SERVER, currentServer);
     load();
   });
 
