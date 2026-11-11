@@ -14,8 +14,12 @@ import { defaultStartDir, listServerDirectory, updateRoot } from '../src/deploy/
 
 const baseApp = { runtime: { start: { command: 'cmd', args: ['/c', 'echo ok'] } } };
 
-function contextWith(rootPath, configPath) {
-  const config = { serverId: 'srv-test01', kind: 'windows', apps: { demo: { ...baseApp, root: rootPath } } };
+// 这些 op 跑在服务器侧，ctx.kind 恒等于服务器平台。测试随宿主换平台，
+// 否则在 Linux 上跑 Windows 路径会先被 isAbsolute 挡掉，测不到盘根校验。
+const HOST_KIND = process.platform === 'win32' ? 'windows' : 'linux';
+
+function contextWith(rootPath, configPath, kind = HOST_KIND) {
+  const config = { serverId: 'srv-test01', kind, apps: { demo: { ...baseApp, root: rootPath } } };
   return createContext(config, () => 0, configPath);
 }
 
@@ -70,11 +74,21 @@ test('列目录：不存在的目录报错，不猜一个默认值', () => {
 });
 
 test('改落点：盘根与系统目录一律拒绝', () => {
-  const ctx = contextWith('C:\\airlock\\apps\\demo', 'C:\\airlock\\config\\deployer.json');
-  assert.throws(() => updateRoot(ctx, 'demo', 'C:\\'), /不能把盘根当发布目录/);
-  assert.throws(() => updateRoot(ctx, 'demo', 'C:\\Windows\\Temp\\x'), /不能发布到系统目录/);
-  assert.throws(() => updateRoot(ctx, 'demo', 'C:\\Program Files\\x'), /不能发布到系统目录/);
-  assert.throws(() => updateRoot(ctx, 'demo', 'relative\\path'), /必须是绝对路径/);
+  const ctx = contextWith(
+    HOST_KIND === 'windows' ? 'C:\\airlock\\apps\\demo' : '/srv/airlock/apps/demo',
+    HOST_KIND === 'windows' ? 'C:\\airlock\\config\\deployer.json' : '/srv/airlock/config/deployer.json',
+  );
+  if (HOST_KIND === 'windows') {
+    assert.throws(() => updateRoot(ctx, 'demo', 'C:\\'), /不能把盘根当发布目录/);
+    assert.throws(() => updateRoot(ctx, 'demo', 'C:\\Windows\\Temp\\x'), /不能发布到系统目录/);
+    assert.throws(() => updateRoot(ctx, 'demo', 'C:\\Program Files\\x'), /不能发布到系统目录/);
+    assert.throws(() => updateRoot(ctx, 'demo', 'relative\\path'), /必须是绝对路径/);
+  } else {
+    assert.throws(() => updateRoot(ctx, 'demo', '/'), /不能把根目录当发布目录/);
+    assert.throws(() => updateRoot(ctx, 'demo', '/etc/airlock/x'), /不能发布到系统目录/);
+    assert.throws(() => updateRoot(ctx, 'demo', '/usr/lib/x'), /不能发布到系统目录/);
+    assert.throws(() => updateRoot(ctx, 'demo', 'relative/path'), /必须是绝对路径/);
+  }
 });
 
 test('改落点：写回配置文件，只动 root，其它字段保留', async () => {
@@ -107,11 +121,14 @@ test('改落点：写回配置文件，只动 root，其它字段保留', async 
 });
 
 test('改落点：同一路径返回「没有变化」，不写文件', async () => {
-  const temp = await tempConfig({ serverId: 'srv-test01', kind: 'windows', apps: { demo: { ...baseApp, root: 'C:\\airlock\\apps\\demo' } } });
+  const same = join(tmpdir(), 'airlock-same-root', 'demo');
+  const seeded = { serverId: 'srv-test01', kind: HOST_KIND, apps: { demo: { ...baseApp, root: same } } };
+  const temp = await tempConfig(seeded);
   try {
-    const ctx = contextWith('C:\\airlock\\apps\\demo', temp.file);
-    const result = updateRoot(ctx, 'demo', 'C:\\airlock\\apps\\demo');
+    const ctx = contextWith(same, temp.file);
+    const result = updateRoot(ctx, 'demo', same);
     assert.match(result.note, /没有变化/);
+    assert.equal(await readFile(temp.file, 'utf8'), `${JSON.stringify(seeded, null, 2)}`, '同一路径不该动文件');
   } finally {
     await temp.cleanup();
   }
