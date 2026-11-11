@@ -7,15 +7,15 @@
  */
 import { execFile } from 'node:child_process';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { applyServer, loadProfileTable, packRelease } from '../local.ts';
+import { applyServer, loadProfileTable, packRelease, readJsonFile } from '../local.ts';
 import { DeployError } from '../errors.ts';
 import { createDeployClient, type DeployClient } from '../client.ts';
 import type { DeployProfile, DeployServer } from '../contracts.ts';
-import { renderPage } from './page.ts';
+import { renderPage, renderWelcomePage } from './page.ts';
 
 const execFileAsync = promisify(execFile);
 const MAX_BODY = 1_000_000;
@@ -282,7 +282,8 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
     let table;
     try {
       const override = options.profilesPath;
-      table = loadProfileTable(override === undefined || override === '' ? undefined : override);
+      // 允许「一份档案都没有」：新用户在欢迎页配好档案后刷新就能生效，不必重启控制台。
+      table = loadProfileTable(override === undefined || override === '' ? undefined : override, { allowMissing: true });
     } catch (error) {
       reloadError = error instanceof Error ? error.message : String(error);
       return;
@@ -339,7 +340,7 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
       throw new DeployError('INVALID_REQUEST', `项目已存在：${name}`);
     }
 
-    const raw = JSON.parse(readFileSync(file, 'utf8')) as { default?: string; profiles: Record<string, DeployProfile> };
+    const raw = readJsonFile(file) as { default?: string; profiles: Record<string, DeployProfile> };
     if (raw.profiles === undefined || typeof raw.profiles !== 'object') {
       throw new DeployError('INVALID_REQUEST', '档案文件结构不对，缺少 profiles');
     }
@@ -536,14 +537,22 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
       const url = new URL(request.url ?? '/', `http://127.0.0.1:${options.port ?? 0}`);
 
       if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-        const page = renderPage({
-          token,
-          projects: projectSummary(),
-          defaultProject: options.defaultProject,
-          airlockRoot: options.airlockRoot ?? process.cwd(),
-          profilesFile: options.profilesFile ?? '',
-          platform: process.platform,
-        });
+        // 还没有项目时给欢迎页：从零开始第一步是去目标机开 SSH（只有人能做），
+        // 直接退出去只会让双击 airlock-ui.cmd 的人看到一个窗口闪一下。
+        const page = projects.length === 0
+          ? renderWelcomePage({
+              airlockRoot: options.airlockRoot ?? process.cwd(),
+              profilesFile: options.profilesFile ?? '',
+              platform: process.platform,
+            })
+          : renderPage({
+              token,
+              projects: projectSummary(),
+              defaultProject: options.defaultProject,
+              airlockRoot: options.airlockRoot ?? process.cwd(),
+              profilesFile: options.profilesFile ?? '',
+              platform: process.platform,
+            });
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         response.end(page);
         return;

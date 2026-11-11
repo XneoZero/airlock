@@ -5,7 +5,7 @@
  * 本工具只负责「把已经构建好的目录推上去」。这样它不绑定任何技术栈。
  */
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, stat } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -46,13 +46,32 @@ function parseTable(raw: unknown, where: string): DeployProfileTable {
 }
 
 function readProfileTableFile(path: string): { table: DeployProfileTable; baseDir: string } {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    throw new DeployError('INVALID_REQUEST', `档案文件不可读或不是 JSON：${path}`);
-  }
+  const raw = readJsonFile(path);
   return { table: parseTable(raw, path), baseDir: dirname(path) };
+}
+
+/**
+ * 读一份档案 JSON，顺手处理两件在 Windows 上一定会遇到的事：
+ *
+ *  1. **UTF-8 BOM**。PowerShell 5.1 的 `Set-Content -Encoding utf8`（以及很多编辑器）会写 BOM，
+ *     而 `JSON.parse` 直接拒掉它。以前这里报「档案文件不可读或不是 JSON」，其实文件好好的，
+ *     只是 BOM 让解析失败——用户会去怀疑路径和权限，方向全错。
+ *  2. **分开说「读不到」和「不是 JSON」**。这两种错的下一步完全不同：前者查路径/权限，
+ *     后者查括号和逗号。
+ */
+export function readJsonFile(path: string): unknown {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    throw new DeployError('INVALID_REQUEST', `档案文件读不到：${path}（检查路径、磁盘和权限）`);
+  }
+  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new DeployError('INVALID_REQUEST', `档案文件不是合法 JSON：${path}（不能有注释或多余的逗号；编码用 UTF-8）`);
+  }
 }
 
 /** 相对 workspace 按它自己那份档案所在目录解析，合并后才不会互相串味。 */
@@ -118,8 +137,14 @@ export interface LoadedProfile {
  */
 /**
  * 读整张档案表。控制台需要列出所有项目，所以解析逻辑单独抽出来，loadProfile 复用它。
+ *
+ * `allowMissing` 只给控制台用：一份档案都没有时返回空表而不是报错，
+ * 让新用户能进「接入第一台服务器」的欢迎页。CLI 各命令保持严格——那里没档案就该失败。
  */
-export function loadProfileTable(profilesPath?: string): { table: ResolvedProfileTable; baseDir: string; source: string } {
+export function loadProfileTable(
+  profilesPath?: string,
+  options?: { readonly allowMissing?: boolean },
+): { table: ResolvedProfileTable; baseDir: string; source: string } {
   const explicitPath = profilesPath ?? process.env[PROFILE_FILE_ENV];
   const inline = process.env[PROFILE_ENV];
   let raw: unknown;
@@ -128,11 +153,7 @@ export function loadProfileTable(profilesPath?: string): { table: ResolvedProfil
 
   if (explicitPath !== undefined && explicitPath.trim() !== '') {
     const path = resolve(explicitPath.trim());
-    try {
-      raw = JSON.parse(readFileSync(path, 'utf8'));
-    } catch {
-      throw new DeployError('INVALID_REQUEST', `档案文件不可读或不是 JSON：${path}`);
-    }
+    raw = readJsonFile(path);
     baseDir = dirname(path);
     source = path;
   } else if (inline !== undefined && inline.trim() !== '') {
@@ -148,6 +169,9 @@ export function loadProfileTable(profilesPath?: string): { table: ResolvedProfil
       .filter(path => existsSync(path))
       .map(path => readProfileTableFile(path));
     if (layers.length === 0) {
+      if (options?.allowMissing === true) {
+        return { table: resolveProfiles({ servers: {}, profiles: {} }, baseDir), baseDir, source };
+      }
       throw new DeployError(
         'INVALID_REQUEST',
         `没有可用的档案：${PROFILE_FILE} 与 ~/.airlock/deploy-profiles.json 都不存在。配好其中一份，或用 --profiles <文件> / ${PROFILE_FILE_ENV} 指定，或设置 ${PROFILE_ENV}`,
@@ -259,7 +283,7 @@ export async function packRelease(options: PackOptions): Promise<PackedRelease> 
 }
 
 export async function readProfileFile(path: string): Promise<DeployProfile> {
-  const raw = JSON.parse(await readFile(path, 'utf8')) as unknown;
+  const raw = readJsonFile(path);
   const resolved = resolveProfiles(parseTable(raw, path), dirname(path));
   const first = Object.values(resolved.profiles)[0];
   if (first === undefined) throw new DeployError('INVALID_REQUEST', `档案表为空：${path}`);

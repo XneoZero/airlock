@@ -563,6 +563,18 @@ airlock-deploy ui --app demo
 
 档案是**每次请求前重新读**的，所以运行中直接编辑 `servers` / `profiles`，回控制台点一下刷新就能看到新服务器和新项目，不用重启控制台。读失败时页面会提示错误并继续用启动时那份，不会整个挂掉。
 
+### 零配置：欢迎页
+
+一份档案都没有、或者档案里还没有项目时，控制台**不会退出**，而是渲染「接入第一台服务器」的引导页：
+
+1. 先把目标机的 SSH 打开（Windows 给三行 `Add-WindowsCapability` / `sshd` / 防火墙规则，Linux 提示装 `openssh-server`）——
+   这一步只有人能进服务器做，agent 没有 SSH 就进不去；
+2. 把页面里生成的提示词复制给 agent（文案与「＋ 服务器」弹窗是同一份，来自 `src/deploy/ui/join-prompt.ts`）；
+3. 接完把 `servers` / `profiles` 写进档案，刷新页面即可，不用重启。
+
+档案文件必须是 **UTF-8 纯 JSON**：PowerShell 5.1 的 `Set-Content -Encoding utf8` 会写 BOM，
+读取侧现在已经自动剥掉（报错也会区分「读不到」和「不是合法 JSON」），但用编辑器保存时仍建议选不带 BOM。
+
 ### 接入新服务器
 
 新机器上要装 Node、建部署账号、改 sshd——这些交给 agent 比照文档手工做可靠得多。控制台留了两个入口：

@@ -61,7 +61,9 @@ const options = parseArgs(process.argv.slice(2));
 
 let table;
 try {
-  table = loadProfileTable(options.profiles);
+  // 一份档案都没有也要能起来：零配置用户看到的应该是「接入第一台服务器」的引导页，
+  // 而不是一个窗口闪一下就没。指定了 --profiles 但文件坏了仍然直接报错。
+  table = loadProfileTable(options.profiles, { allowMissing: true });
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error), '先配好档案，或用 --profiles 指定');
 }
@@ -86,15 +88,12 @@ for (const [name, profile] of Object.entries(table.table.profiles)) {
 if (skipped.length > 0) {
   process.stderr.write(`[airlock-ui] 跳过没有 app 的档案：${skipped.join(', ')}（在档案里写 "app": "web" 或用 --app 指定）\n`);
 }
-if (projects.length === 0) {
-  fail('没有可用的项目', '在档案里给每个项目写 "app": "<应用id>"，或用 --app 指定一个');
-}
+// 一个项目都没有不是错误：控制台会渲染「接入第一台服务器」的引导页。
 
-const defaultProject = options.profile !== '' && projects.some(item => item.name === options.profile)
-  ? options.profile
-  : (table.table.default !== undefined && projects.some(item => item.name === table.table.default)
-    ? table.table.default
-    : projects[0].name);
+const preferredProject = options.profile !== '' ? options.profile : (table.table.default ?? '');
+const defaultProject = projects.some(item => item.name === preferredProject)
+  ? preferredProject
+  : (projects[0]?.name ?? '');
 
 // 控制台要能「添加项目」，所以需要知道档案文件在哪、拿谁做连接模板。
 const profileFile = existsSync(table.source) ? table.source : undefined;
@@ -105,7 +104,10 @@ const baseProfile = template === undefined ? undefined : (() => {
   delete copy.workspace;
   return copy;
 })();
-if (profileFile === undefined) {
+// 档案来自环境变量时写不回去，「添加项目」只能关掉。零配置（还没有档案）不算这种情况，
+// 那时候本来就没什么可写的，别吓人。
+const profileFromEnv = table.source === 'AIRLOCK_DEPLOY_PROFILES' || table.source === 'AIRLOCK_DEPLOY_PROFILES_FILE';
+if (profileFile === undefined && profileFromEnv) {
   process.stderr.write('[airlock-ui] 档案来自环境变量，控制台的「添加项目」会不可用（无法写回）\n');
 }
 
@@ -142,9 +144,13 @@ try {
 }
 
 process.stdout.write(`控制台已启动：${ui.url}\n`);
-process.stdout.write(`项目 ${projects.map(item => `${item.name}(${item.app})`).join('、')} · 默认 ${defaultProject}\n`);
-const serverNames = Object.keys(table.table.servers);
-if (serverNames.length > 0) process.stdout.write(`服务器可选：${serverNames.join('、')}（控制台右上角切换）\n`);
+if (projects.length === 0) {
+  process.stdout.write('还没有可发布的项目：页面里有「接入第一台服务器」的引导（开 SSH → 把提示词交给 agent → 写档案）。\n');
+} else {
+  process.stdout.write(`项目 ${projects.map(item => `${item.name}(${item.app})`).join('、')} · 默认 ${defaultProject}\n`);
+  const serverNames = Object.keys(table.table.servers);
+  if (serverNames.length > 0) process.stdout.write(`服务器可选：${serverNames.join('、')}（控制台右上角切换）\n`);
+}
 process.stdout.write('按 Ctrl+C 停止。\n');
 
 if (options.open) {

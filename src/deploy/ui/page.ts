@@ -3,6 +3,8 @@
  *
  * 注意：内联 JS 里刻意不用模板字符串（反引号），否则会和本文件外层的模板字符串打架。
  */
+import { JOIN_TARGET_PLACEHOLDER, buildJoinPrompt } from './join-prompt.ts';
+
 export interface PageProject {
   readonly name: string;
   readonly app: string;
@@ -26,6 +28,14 @@ export interface PageOptions {
 }
 
 export function renderPage(options: PageOptions): string {
+  // 提示词由服务端生成好再塞进页面：零配置欢迎页用的是同一份，两处文案不会漂。
+  // 前端只把占位符换成用户填的地址，不重新拼一遍句子。
+  const sep = options.platform === 'win32' ? '\\' : '/';
+  const hostOs = options.platform === 'win32' ? 'Windows' : (options.platform === 'darwin' ? 'macOS' : 'Linux');
+  const joinTemplates = {
+    windows: buildJoinPrompt({ platform: 'windows', airlockRoot: options.airlockRoot, profilesFile: options.profilesFile, sep, hostOs }),
+    linux: buildJoinPrompt({ platform: 'linux', airlockRoot: options.airlockRoot, profilesFile: options.profilesFile, sep, hostOs }),
+  };
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -295,12 +305,9 @@ export function renderPage(options: PageOptions): string {
   var PROJECTS = ${JSON.stringify(options.projects)};
   var currentProject = ${JSON.stringify(options.defaultProject)};
   var currentServer = '';
-  var AIRLOCK_ROOT = ${JSON.stringify(options.airlockRoot)};
-  var PROFILES_FILE = ${JSON.stringify(options.profilesFile)};
-  var PLATFORM = ${JSON.stringify(options.platform)};
-  // 路径分隔符按平台来：提示词里的命令要能直接在用户自己的机器上跑。
-  var SEP = PLATFORM === 'win32' ? String.fromCharCode(92) : '/';
-  var HOST_OS = PLATFORM === 'win32' ? 'Windows' : (PLATFORM === 'darwin' ? 'macOS' : 'Linux');
+  // 接入提示词由服务端生成（与欢迎页共用一份），前端只替换目标地址。
+  var JOIN_TEMPLATES = ${JSON.stringify(joinTemplates)};
+  var JOIN_HOST = ${JSON.stringify(JOIN_TARGET_PLACEHOLDER)};
   var APP = '';
   var busy = false;
   var overviewData = null;
@@ -549,79 +556,11 @@ export function renderPage(options: PageOptions): string {
 
   q('btn-root').addEventListener('click', function(){ openServerBrowser(); });
 
-  // ---- 接入新服务器：把「怎么接」写成一段能直接交给 agent 的话 ----
-  function buildJoinPrompt(host, platform){
-    var target = host && host.trim() ? host.trim() : '<目标机器地址>';
-    var os = platform === 'linux' ? 'Linux' : 'Windows';
-    var profileWhere = PROFILES_FILE !== ''
-      ? PROFILES_FILE
-      : '档案文件 deploy-profiles.json（可能由 AIRLOCK_DEPLOY_PROFILES_FILE 环境变量指定）';
-    var lines = [
-      '帮我把一台新机器接成 Airlock 的部署目标。',
-      '',
-      '【工具】Airlock 装在本机 ' + AIRLOCK_ROOT + '（' + HOST_OS + '）',
-      '【档案】' + profileWhere,
-      '【目标】' + target + '（' + os + '）',
-      '',
-      '按顺序做，每一步都要验证结果，不要假设上一步已经生效：',
-      ''
-    ];
-
-    if (os === 'Windows') {
-      lines = lines.concat([
-        '1. 先测目标机 22 端口，区分两种失败：',
-        '   · 连接超时 = 包被丢掉（云安全组或防火墙），22 没放行要我本人去云控制台开，agent 开不了；',
-        '   · 连接拒绝 = 端口通了但 sshd 没在监听。',
-        '   只有 3389/21 能通、22 超时，是最常见的第一道坎。',
-        '2. 装 Node ≥ 24，记下 node.exe 的绝对路径，后面 deployer 命令要用。',
-        '3. 建部署账号（默认 ag-ssh）+ 专用密钥。这一步最容易翻车，三个必查项：',
-        '   a. 公钥必须写进「真实的 profile 目录」——Windows 上常常是 C:' + SEP + 'Users' + SEP + 'ag-ssh.<机器名>，',
-        '      不是 C:' + SEP + 'Users' + SEP + 'ag-ssh。用注册表 ProfileList 查实际目录，别猜。',
-        '   b. sshd_config 里如果有 AllowGroups / AllowUsers，新账号必须在名单里，',
-        '      否则密钥再对也会被拒，而日志只会说 publickey denied。',
-        '   c. authorized_keys 必须是 ASCII 或 UTF-8 无 BOM，写文件时显式指定编码。',
-        '4. 配 sshd 的 Match User + ForceCommand（只允许走部署通道）。',
-        '   改之前先挂一个 10 分钟自动回滚的计划任务，改完立刻测一次能登进来再继续。',
-        '5. 把 ' + AIRLOCK_ROOT + ' 里的 bin/ 和 src/ 拷到目标机，写 config/deployer.json',
-        '   （应用 id、root、start/stop、健康检查）。root 默认放管理员桌面。',
-        '6. 在档案里加一个 servers 条目，然后跑',
-        '   node "' + AIRLOCK_ROOT + SEP + 'bin' + SEP + 'airlock-deploy.mjs" status --app <应用>',
-        '   确认能连通、能看到 root。',
-        '',
-        '已知的坑（上次接机器时真遇到过，别重复）：',
-        '· Windows 防火墙规则 OpenSSH-Server-In-TCP 可能是 Disabled，而且只覆盖 Private 配置文件。',
-        '  表现就是「服务 Running、22 依然不通」。要启用它并覆盖实际使用的配置文件（Domain/Public）。',
-        '· 改 authorized_keys 的 ACL 时不要用 /inheritance:r 一刀切，那会把 Administrators 也锁在外面。',
-        '  保留 SYSTEM 和 Administrators 的访问权。',
-        '· 不要复用日常或 RDP 账号做部署账号：同一账号 SSH 与 RDP 会互踢会话。'
-      ]);
-    } else {
-      lines = lines.concat([
-        '1. 先测目标机 22 端口。连接超时要区分是云安全组丢包还是 sshd 没起。',
-        '2. 装 Node ≥ 24，记下 node 的绝对路径。',
-        '3. 建部署账号（默认 ag-ssh）+ 专用密钥，写进 ~/.ssh/authorized_keys，权限 600、目录 700。',
-        '4. 配 sshd 的 Match User + ForceCommand（只允许走部署通道）。',
-        '   改之前先挂一个 10 分钟自动回滚的 cron/systemd timer，改完立刻测一次能登进来再继续。',
-        '5. 把 ' + AIRLOCK_ROOT + ' 里的 bin/ 和 src/ 拷到目标机，写 config/deployer.json',
-        '   （应用 id、root、start/stop、健康检查）。root 按目标机的惯例选，别放在会被清理的目录。',
-        '6. 在档案里加一个 servers 条目，然后跑',
-        '   node "' + AIRLOCK_ROOT + SEP + 'bin' + SEP + 'airlock-deploy.mjs" status --app <应用>',
-        '   确认能连通、能看到 root。',
-        '',
-        '已知的坑：',
-        '· 不要复用日常账号做部署账号；SSH 的 ForceCommand 会影响这个账号的所有登录。',
-        '· deployer 是裸进程托管时，systemd 的 KillMode 若为 control-group，ssh 断开可能连带收掉子进程。'
-      ]);
-    }
-
-    return lines.concat([
-      '',
-      '做完告诉我：服务器名字、应用 id、落点路径、要开哪些端口。'
-    ]).join('\\n');
-  }
-
+  // ---- 接入新服务器：文案在服务端生成（见 join-prompt.ts），这里只把占位符换成地址 ----
   function refreshJoinPrompt(){
-    q('join-prompt').value = buildJoinPrompt(q('join-host').value, q('join-platform').value);
+    var host = (q('join-host').value || '').trim();
+    var platform = q('join-platform').value === 'linux' ? 'linux' : 'windows';
+    q('join-prompt').value = JOIN_TEMPLATES[platform].split(JOIN_HOST).join(host === '' ? JOIN_HOST : host);
   }
 
   function openJoin(){
@@ -1083,6 +1022,163 @@ export function renderPage(options: PageOptions): string {
   });
 
   load();
+})();
+</script>
+</body>
+</html>`;
+}
+
+/**
+ * 欢迎页：这台机器上还没有任何可发布项目时显示。
+ *
+ * 不在启动时直接退出（`没有可用的项目`），因为从零开始时第一步不是配档案，
+ * 而是去目标机上把 SSH 打开——那一步 agent 做不了，只能提示人自己去 RDP。
+ * 页面把三件事按顺序摆出来：开 SSH → 把提示词交给 agent → 写档案。
+ */
+export interface WelcomeOptions {
+  /** 本机 Airlock 安装目录（包根）。 */
+  readonly airlockRoot: string;
+  /** 实际生效的档案文件；档案来自环境变量时为空。 */
+  readonly profilesFile: string;
+  /** 运行控制台的操作系统（process.platform）。 */
+  readonly platform: string;
+}
+
+export function renderWelcomePage(options: WelcomeOptions): string {
+  const sep = options.platform === 'win32' ? '\\' : '/';
+  const hostOs = options.platform === 'win32' ? 'Windows' : (options.platform === 'darwin' ? 'macOS' : 'Linux');
+  const profilesFile = options.profilesFile !== ''
+    ? options.profilesFile
+    : 'config/deploy-profiles.json（项目根）或 ~/.airlock/deploy-profiles.json（本机共用）';
+  const prompts = {
+    windows: buildJoinPrompt({ platform: 'windows', airlockRoot: options.airlockRoot, profilesFile, sep, hostOs }),
+    linux: buildJoinPrompt({ platform: 'linux', airlockRoot: options.airlockRoot, profilesFile, sep, hostOs }),
+  };
+  const sample = {
+    default: 'demo',
+    servers: {
+      'srv-01': {
+        host: '<目标机 IP>',
+        user: 'ag-ssh',
+        identityFile: 'C:/Users/你/.ssh/ag_deploy_ed25519',
+        deployerCommand: 'C:/airlock/bin/deploy.cmd',
+      },
+    },
+    profiles: {
+      demo: { server: 'srv-01', app: 'demo', workspace: '<本地项目目录>' },
+    },
+  };
+  // 示例里的 <目标机 IP> 是给人看的占位符；不转义的话浏览器会当成未知标签。
+  const sampleText = JSON.stringify(sample, null, 2).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Airlock 发布控制台 · 接入第一台服务器</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161a22; --line:#262c38; --text:#d7dce6; --dim:#8b93a7;
+    --accent:#4f8cff; --ok:#3fb950; --warn:#d29922; --mono:'JetBrains Mono','Cascadia Code',Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.6 -apple-system,'Segoe UI','Microsoft YaHei',sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line)}
+  header b{font-size:15px;letter-spacing:.02em}
+  .tag{font-size:11px;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:1px 8px}
+  main{max-width:880px;margin:0 auto;padding:26px 20px 60px}
+  h2{margin:0 0 6px;font-size:20px}
+  h3{margin:26px 0 8px;font-size:15px}
+  p{margin:6px 0 10px;color:#c3cad8}
+  .dim{color:var(--dim)}
+  code,kbd{font-family:var(--mono);font-size:12.5px}
+  code{background:#11151c;border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+  pre{background:#11151c;border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+      overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.55;margin:8px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+  .steps{border-left:2px solid var(--line);padding-left:0;margin:0}
+  textarea{width:100%;min-height:200px;background:#11151c;color:var(--text);border:1px solid var(--line);
+           border-radius:8px;padding:12px;font-family:var(--mono);font-size:12.5px;line-height:1.55;resize:vertical}
+  .tabs{display:flex;gap:8px;margin:10px 0}
+  .tabs button{background:#11151c;color:var(--dim);border:1px solid var(--line);border-radius:6px;
+               padding:5px 12px;font-size:12.5px;cursor:pointer}
+  .tabs button.active{color:#fff;border-color:var(--accent);background:#1b2436}
+  .row{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .btn{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer}
+  .note{color:var(--dim);font-size:12.5px}
+</style>
+</head>
+<body>
+<header><b>Airlock</b> 发布控制台 <span class="tag">首次运行</span></header>
+<main>
+  <h2>还没有可发布的项目</h2>
+  <p>控制台的项目来自档案 <code>${profilesFile}</code>。它现在没有项目，
+     或者这台机器上还没接过服务器。从零接一台机器是三件事，按顺序来。</p>
+
+  <div class="card steps">
+    <h3>第 1 步 · 先把目标机的 SSH 打开（这步只能你本人做）</h3>
+    <p>agent 进不了没有 SSH 的机器。3389（Windows 远程桌面）能连就先 RDP 进去，
+       管理员 PowerShell 里执行下面三行；云安全组里也要放行 22。</p>
+    <pre>Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Start-Service sshd; Set-Service sshd -StartupType Automatic
+Get-NetFirewallRule -DisplayName 'OpenSSH-Server-In-TCP' | Set-NetFirewallRule -Enabled True -Profile Any</pre>
+    <p class="note">Linux 目标机：装 <code>openssh-server</code> 并放行 22，流程见
+       <code>docs/ONBOARDING-LINUX.md</code>；Windows 见 <code>docs/ONBOARDING.md</code>。</p>
+    <p class="note">验证：在本机跑 <code>ssh -p 22 用户@目标机</code>，能看到
+       <kbd>Permission denied (publickey)</kbd> 就说明 22 通了（还没配钥而已）；
+       报 <kbd>Connection refused</kbd> 是 sshd 没起来，<kbd>Connection timed out</kbd> 是安全组没放行。</p>
+
+    <h3>第 2 步 · 把下面这段交给 agent</h3>
+    <p>它会按文档建账号、配 sshd 门禁、写 deployer 配置。你说清楚目标机地址就行，
+       其余步骤提示词里已经写全了——包括哪些坑不要踩。</p>
+    <div class="tabs">
+      <button type="button" class="active" data-platform="windows">Windows 目标机</button>
+      <button type="button" data-platform="linux">Linux 目标机</button>
+    </div>
+    <textarea id="prompt" readonly></textarea>
+    <div class="row">
+      <button type="button" class="btn" id="copy">复制这段提示词</button>
+      <span class="note" id="copied"></span>
+    </div>
+
+    <h3>第 3 步 · 接完把服务器写进档案</h3>
+    <p>agent 会告诉你服务器名、应用 id、落点路径。把这些写进 <code>${profilesFile}</code>
+       （文件不存在就新建），最小一份长这样：</p>
+    <pre>${sampleText}</pre>
+    <p class="note">写完刷新本页即可；档案每个请求前都会重读，不用重启控制台。
+       路径用正斜杠，PowerShell 5.1 的 <code>Set-Content -Encoding utf8</code> 会写 BOM，
+       建议用编辑器保存为 UTF-8（无 BOM）。</p>
+  </div>
+</main>
+<script>
+(function(){
+  'use strict';
+  var PROMPTS = ${JSON.stringify(prompts)};
+  var HOST = ${JSON.stringify(JOIN_TARGET_PLACEHOLDER)};
+  var PLATFORM = 'windows';
+  var box = document.getElementById('prompt');
+  function render(){
+    var text = PROMPTS[PLATFORM];
+    // 没填地址就保留占位符：提示词里「<目标机器地址>」比空白更清楚。
+    box.value = text;
+  }
+  var tabs = document.querySelectorAll('.tabs button');
+  for (var i = 0; i < tabs.length; i++){
+    tabs[i].addEventListener('click', function(){
+      PLATFORM = this.getAttribute('data-platform');
+      for (var j = 0; j < tabs.length; j++) tabs[j].className = tabs[j] === this ? 'active' : '';
+      render();
+    });
+  }
+  document.getElementById('copy').addEventListener('click', function(){
+    box.select();
+    var done = function(){ document.getElementById('copied').textContent = '已复制'; };
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(box.value).then(done, function(){ document.execCommand('copy'); done(); });
+    } else { document.execCommand('copy'); done(); }
+  });
+  render();
 })();
 </script>
 </body>

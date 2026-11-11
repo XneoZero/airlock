@@ -74,6 +74,8 @@ npm run typecheck
 `npm i -g ./airlock-0.1.0.tgz` 直接装。
 
 想先看界面：双击 `airlock-ui.cmd`（或 `./airlock-ui.sh`），见 [控制台](#控制台)。
+还没有档案时它不会空转退出，而是打开「接入第一台服务器」的引导页——顺序是
+**先由人 RDP 进目标机把 SSH 打开**（agent 进不去没有 SSH 的机器），再把页面上那段提示词交给 agent。
 
 ### 通道一：`remote-dev`（改服务器上的文件）
 
