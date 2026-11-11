@@ -15,12 +15,12 @@
   "author": "Xneo",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/l1217974476/airlock.git"
+    "url": "git+https://github.com/XneoZero/airlock.git"
   },
   "bugs": {
-    "url": "https://github.com/l1217974476/airlock/issues"
+    "url": "https://github.com/XneoZero/airlock/issues"
   },
-  "homepage": "https://github.com/l1217974476/airlock#readme",
+  "homepage": "https://github.com/XneoZero/airlock#readme",
   "type": "module",
   "engines": {
     "node": ">=24"
