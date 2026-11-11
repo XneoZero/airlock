@@ -12,15 +12,15 @@
     "capability-broker"
   ],
   "license": "MIT",
-  "author": "",
+  "author": "Xneo",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/airlock.git"
+    "url": "git+https://github.com/l1217974476/airlock.git"
   },
   "bugs": {
-    "url": "https://github.com/OWNER/airlock/issues"
+    "url": "https://github.com/l1217974476/airlock/issues"
   },
-  "homepage": "https://github.com/OWNER/airlock#readme",
+  "homepage": "https://github.com/l1217974476/airlock#readme",
   "type": "module",
   "engines": {
     "node": ">=24"

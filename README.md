@@ -59,9 +59,9 @@ agent / MCP client                         本地
 需要 **Node.js ≥ 24**：直接运行 TypeScript，靠内置类型剥离，没有构建步骤。
 
 ```bash
-git clone <your-repo> airlock && cd airlock
+git clone https://github.com/l1217974476/airlock.git && cd airlock
 npm install
-npm test            # 75 个测试，不连服务器、不读 config/
+npm test            # 78 个测试，不连服务器、不读 config/
 npm run typecheck
 ```
 
