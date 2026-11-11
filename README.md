@@ -231,9 +231,23 @@ node bin/airlock-deploy-ui.mjs         # 或直接跑仓库里的入口
 
 ### 接入新机器
 
-新机器上要装 Node、建部署账号、改 sshd、写 `deployer.json`。控制台顶部「＋ 服务器」会把这一整套
-写成一段提示词，复制给 agent 就行——里面带了本机实际路径、每步的验证要求和几个已知的坑
-（Windows 防火墙规则、`AllowGroups` 白名单、profile 目录带机器后缀、ACL 别一刀切）。
+**Windows 上一条命令**（在目标机的管理员 PowerShell 里跑，源码先按
+[docs/TRANSFER.md](docs/TRANSFER.md) 弄上去）：
+
+```powershell
+.\scripts\bootstrap-windows.ps1 -PublicKey 'ssh-ed25519 AAAA... ag-ssh-deploy' -AppId demo
+```
+
+它依次做：下载源码（GitHub 被 reset 就自动换国内镜像）→ 装 Node 24（npmmirror）→
+解到 `C:\airlock` 并 `npm ci --omit=dev` → 建部署账号 + 密钥 + sshd 门禁 →
+**在管理员桌面生成默认落点配置与启停脚本并授权**。加 `-DryRun` 可以先看它要做什么。
+
+不想用脚本、或目标是 Linux，按 [docs/ONBOARDING.md](docs/ONBOARDING.md)（Windows）/
+[docs/ONBOARDING-LINUX.md](docs/ONBOARDING-LINUX.md)（Linux）一步步来。
+国内云主机拿不到 GitHub、或 agent 只剩发布通道时怎么办，见 [docs/TRANSFER.md](docs/TRANSFER.md)。
+
+控制台顶部「＋ 服务器」会把这一整套写成一段提示词，复制给 agent 就行——里面带了本机实际路径、
+每步的验证要求和几个已知的坑（Windows 防火墙规则、`AllowGroups` 白名单、profile 目录带机器后缀、ACL 别一刀切）。
 
 平台相关的路径和措辞按运行控制台的操作系统生成，Windows / macOS / Linux 各按各的写。
 

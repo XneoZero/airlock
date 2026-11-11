@@ -5,6 +5,10 @@
 > 不想逐条读：先在本机双击 `airlock-ui.cmd` 打开控制台。一份档案都没有时它会显示
 > 「接入第一台服务器」的引导页，把页面上那段提示词交给 agent 就行——里面已经带了
 > 下面这些步骤和坑。但**第 1 步只能你本人做**：进不了没有 SSH 的机器，agent 也一样。
+>
+> 更省事：源码在机器上之后，一条命令走完第 2~5 步——
+> `.\scripts\bootstrap-windows.ps1 -PublicKey '<公钥>' -AppId <应用id>`（`-DryRun` 先看）。
+> 下载被墙、服务器没外网、agent 没有 shell 时的办法见 [TRANSFER.md](TRANSFER.md)。
 
 > **Linux 服务器**走另一份：[ONBOARDING-LINUX.md](ONBOARDING-LINUX.md)。
 > 账号、门禁、systemd 托管、Node 安装的坑都不一样，别混用。

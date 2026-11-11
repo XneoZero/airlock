@@ -169,6 +169,10 @@ airlock-deploy mcp                            # 给 MCP 客户端的 stdio 服�
 | 换网络后连不上 | 来源 IP 白名单 | 从 RDP/控制台改防火墙规则加新 IP |
 | `consistent: false` | 有人手动改过 `current` 链接 | 查磁盘实际指向，确认后再决定 |
 | 改落点后服务没换 | 启动脚本写死了旧 root | 见「改服务器上的落点」的警告 |
+| `STOP_FAILED`：stop 之后端口仍在监听 | 旧进程没杀掉（pid 文件丢了、杀错进程），health 会探到它 | 杀进程后重发；这时代码刻意保持 `current` 不动，服务没中断 |
+| `curl: (56) Recv failure: Connection was reset` | 服务器到 `github.com` 被 reset，不是脚本问题 | 换镜像（ghproxy / gh-proxy / ghfast），见 `docs/TRANSFER.md` |
+| 接入后 `Permission denied` 但密钥、ACL 都对 | `AllowGroups` 白名单里没有该账号的组；中文 Windows 上本地组叫「OpenSSH 用户」，配的英文名匹配不上 | 自建英文组（如 `airlock-deploy`）并补进 `AllowGroups` |
+| agent 只剩发布通道、改不了服务器文件 | `ForceCommand` 已生效 | 用「更新器版本」通过发布通道自更新，见 `docs/TRANSFER.md` 4.2 |
 
 ## 确认你的环境
 
