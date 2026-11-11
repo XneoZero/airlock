@@ -157,7 +157,8 @@ airlock-deploy status  --app web --server staging                # 同一份代�
 切换前后都落 `state.json` 与日志，失败如实写 `failed` 并自动回退到上一版。
 
 配置、回滚语义、数据备份细节见 [docs/DEPLOY.md](docs/DEPLOY.md)；
-从零接入一台新服务器见 [docs/ONBOARDING.md](docs/ONBOARDING.md)。
+从零接入一台新服务器见 [docs/ONBOARDING.md](docs/ONBOARDING.md)（Windows）或
+[docs/ONBOARDING-LINUX.md](docs/ONBOARDING-LINUX.md)（Linux）。
 
 ## 控制台
 

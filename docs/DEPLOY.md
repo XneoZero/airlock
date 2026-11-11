@@ -555,6 +555,12 @@ airlock-deploy ui --app demo
 
 切换项目时，应用、本地目录、候选产物目录会一起变；切换服务器只换连接，应用和目录跟着项目走。
 
+顶部「系统」栏显示服务器自己报上来的操作系统：Linux 上是 `/etc/os-release` 的
+`PRETTY_NAME`（例如 `OpenCloudOS 9.6`），Windows 退化成内核版本；点它看发行版、架构、
+内核、主机名和 Node 版本。数据来自 `sysinfo` op，**服务器上的部署器要一起升级**——
+旧版本不认识这个 op，那一栏只显示 `Linux` / `Windows`，悬停会提示「部署器还不支持 sysinfo」。
+这个降级是刻意的：控制台不能因为一台机器的部署器版本旧就整页报错。
+
 档案是**每次请求前重新读**的，所以运行中直接编辑 `servers` / `profiles`，回控制台点一下刷新就能看到新服务器和新项目，不用重启控制台。读失败时页面会提示错误并继续用启动时那份，不会整个挂掉。
 
 ### 接入新服务器
@@ -645,10 +651,13 @@ airlock-deploy ui --app demo --token my-fixed-token
   `ForceCommand` 门禁生效（受限账号只能跑 deployer）、发布 v1、发布 v2 平滑切换、
   发坏版本触发 `HEALTH_FAILED` 并自动切回、手动 `rollback` 回上一版、
   `state.json` 历史与 `deploy.log` 记录正确
+- **真机 Linux（OpenCloudOS 9.6 / Node 24.22 / OpenSSH 9.3 / systemd 255）**：
+  `provision-linux.sh` 建账号并对 `sshd_config` 做幂等门禁替换（含 `sshd -t` 校验与
+  10 分钟自动回滚守卫）、`symlink` + systemd 托管、首次发布、发坏版本自动回退、
+  手动 `rollback`，结果同上。流程见 [ONBOARDING-LINUX.md](ONBOARDING-LINUX.md)
 
 未验证：
 
-- 真实服务器的 Linux 分支（`symlink` + systemd），本机是 Windows，只验了 junction
 - 大包（几百 MB）在慢链路下的传输稳定性
 - 多应用并发发布（工具不提供锁，靠运维约定）
 - 带数据库迁移的回滚（本工具只管文件，migration/schema 兼容要自己保证）

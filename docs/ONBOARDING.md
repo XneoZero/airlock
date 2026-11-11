@@ -2,6 +2,9 @@
 
 复制这份清单，从上往下做，**每步都有「验证」——不通过就别往下走**。
 
+> **Linux 服务器**走另一份：[ONBOARDING-LINUX.md](ONBOARDING-LINUX.md)。
+> 账号、门禁、systemd 托管、Node 安装的坑都不一样，别混用。
+
 本文基于 2026-11-10 一次真实的从零接入（Windows Server 2025 / Node 24.22 / OpenSSH），
 所有坑都是当场踩出来的，不是推测。
 
