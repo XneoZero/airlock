@@ -17,7 +17,7 @@ import { createDeployClient } from '../src/deploy/client.ts';
 import { loadProfile, packRelease } from '../src/deploy/local.ts';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-const USAGE = `用法：node bin/airlock-deploy.mjs <命令> [--app 名字] [--profile 档案] [参数]
+const USAGE = `用法：node bin/airlock-deploy.mjs <命令> [--app 名字] [--profile 档案] [--server 名字] [参数]
 命令：
   status   [--app 名字] [--probe]        服务器上各应用的当前版本、历史与健康
   list     --app 名字                    版本列表（含未激活的）
@@ -28,7 +28,9 @@ const USAGE = `用法：node bin/airlock-deploy.mjs <命令> [--app 名字] [--p
   mcp                                    给 MCP 客户端的 stdio 服务器
 档案：--profile 名字 / AIRLOCK_DEPLOY_PROFILE
       表：--profiles <文件> / AIRLOCK_DEPLOY_PROFILES_FILE（全局放一份，所有项目共用）
-          / AIRLOCK_DEPLOY_PROFILES（内联 JSON）/ config/deploy-profiles.json（当前目录）`;
+          / AIRLOCK_DEPLOY_PROFILES（内联 JSON）/ config/deploy-profiles.json（当前目录）
+服务器：--server 名字（档案 servers 段里的键）。只换机器，app 与本地目录不变。
+        不传就用该 profile 自己写的那台。`;
 
 function fail(message, hint) {
   process.stderr.write(`[deploy] ${message}\n`);
@@ -36,7 +38,7 @@ function fail(message, hint) {
   process.exit(1);
 }
 
-const takesValue = new Set(['--app', '--profile', '--profiles', '--source', '--version', '--exclude', '--commit', '--to', '--lines', '--timeout']);
+const takesValue = new Set(['--app', '--profile', '--profiles', '--server', '--source', '--version', '--exclude', '--commit', '--to', '--lines', '--timeout']);
 
 function parseArgs(argv) {
   const options = { profile: process.env.AIRLOCK_DEPLOY_PROFILE ?? '', timeoutMs: undefined, probe: false, restoreBackup: false };
@@ -86,7 +88,11 @@ if (command === 'mcp') {
 } else {
   let loaded;
   try {
-    loaded = loadProfile(options.profile === '' ? undefined : options.profile, options.profiles);
+    loaded = loadProfile(
+      options.profile === '' ? undefined : options.profile,
+      options.profiles,
+      options.server,
+    );
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }

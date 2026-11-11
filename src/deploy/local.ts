@@ -167,19 +167,38 @@ export function loadProfileTable(profilesPath?: string): { table: ResolvedProfil
   return { table: resolveProfiles(parseTable(raw, source), baseDir), baseDir, source };
 }
 
-export function loadProfile(name?: string, profilesPath?: string): LoadedProfile {
+/**
+ * 换服务器：只换连接信息，应用 id 与本地目录跟着项目走。
+ *
+ * 名字对不上就报错，绝不退回「默认那台」——发错机器比报错危险得多。
+ */
+export function applyServer(profile: DeployProfile, servers: Record<string, DeployServer>, serverId?: string): DeployProfile {
+  if (serverId === undefined || serverId === '') return profile;
+  const server = servers[serverId];
+  if (server === undefined) {
+    const known = Object.keys(servers).join(', ') || '（空）';
+    throw new DeployError('INVALID_REQUEST', `未知服务器：${serverId}。已配置：${known}`);
+  }
+  return {
+    ...server,
+    ...(profile.app === undefined ? {} : { app: profile.app }),
+    ...(profile.workspace === undefined ? {} : { workspace: profile.workspace }),
+  };
+}
+
+export function loadProfile(name?: string, profilesPath?: string, serverId?: string): LoadedProfile {
   const { table, baseDir } = loadProfileTable(profilesPath);
   const chosen = name ?? table.default;
   if (chosen === undefined || chosen === '') {
     const names = Object.keys(table.profiles).join(', ') || '（空）';
     throw new DeployError('INVALID_REQUEST', `没有指定档案，且档案表没有 default。已配置：${names}`);
   }
-  const profile = table.profiles[chosen];
-  if (profile === undefined) {
+  const chosenProfile = table.profiles[chosen];
+  if (chosenProfile === undefined) {
     const names = Object.keys(table.profiles).join(', ') || '（空）';
     throw new DeployError('INVALID_REQUEST', `找不到档案：${chosen}。已配置：${names}`);
   }
-  return { name: chosen, profile, baseDir };
+  return { name: chosen, profile: applyServer(chosenProfile, table.servers, serverId), baseDir };
 }
 
 /** 版本号：时间戳 + git 短哈希。同秒重复时由服务器 VERSION_EXISTS 拦住，不自动加后缀。 */

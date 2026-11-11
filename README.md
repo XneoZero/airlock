@@ -131,6 +131,7 @@ npm run build                                                    # 先自己验�
 airlock-deploy release --app web --source ./dist                 # 打包 → 上传 → 切版本 → 重启 → 探活
 airlock-deploy rollback --app web                                # 切回上一版，起不来会自己退回来
 airlock-deploy status  --app web --probe                         # 现在跑的是哪版、健康不健康
+airlock-deploy status  --app web --server staging                # 同一份代码，换台机器查
 ```
 
 服务器侧目录：
@@ -201,7 +202,9 @@ node bin/airlock-deploy-ui.mjs         # 或直接跑仓库里的入口
 }
 ```
 
-`servers` 是机器清单，`profiles` 是项目。控制台右上角的服务器下拉就是 `servers` 的键。
+`servers` 是机器清单，`profiles` 是项目。控制台右上角的服务器下拉就是 `servers` 的键；
+命令行用 `--server <名字>`，和控制台是同一套解析：**只换机器，app 与本地目录跟着项目走**。
+名字写错会直接报错，不会退回默认那台。
 档案**每个请求前都会重读**，所以运行中改了档案，回控制台刷新就能看到新服务器，不用重启。
 
 档案查找顺序：`--profiles` > `AIRLOCK_DEPLOY_PROFILES_FILE` > `AIRLOCK_DEPLOY_PROFILES`（内联 JSON）

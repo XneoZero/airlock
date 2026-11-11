@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadProfile, loadProfileTable } from '../src/deploy/local.ts';
+import { applyServer, loadProfile, loadProfileTable } from '../src/deploy/local.ts';
 
 async function withTable(table, run) {
   const dir = await mkdtemp(join(tmpdir(), 'airlock-profiles-'));
@@ -100,4 +100,42 @@ test('loadProfile：按名字拿到解析后的档案，相对 workspace 按文�
     assert.ok(loaded.profile.workspace.endsWith('site'), '相对 workspace 要变成绝对路径');
     assert.ok(!loaded.profile.workspace.startsWith('.'), '不能用相对路径喂给打包器');
   });
+});
+
+test('--server：只换机器，app 与本地目录不变', async () => {
+  await withTable({
+    default: 'demo',
+    servers: {
+      'srv-a': { host: 'a.example', user: 'ua', identityFile: 'k1', deployerCommand: deployer },
+      'srv-b': { host: 'b.example', user: 'ub', identityFile: 'k2', deployerCommand: deployer },
+    },
+    profiles: { demo: { server: 'srv-a', app: 'demo', workspace: 'C:/work/demo' } },
+  }, file => {
+    const base = loadProfile(undefined, file);
+    assert.equal(base.profile.host, 'a.example');
+
+    const moved = loadProfile(undefined, file, 'srv-b');
+    assert.equal(moved.profile.host, 'b.example', '连到了另一台');
+    assert.equal(moved.profile.user, 'ub');
+    assert.equal(moved.profile.identityFile, 'k2', '密钥也要换，不能拿 A 机的钥匙开 B 机');
+    assert.equal(moved.profile.app, 'demo', 'app 跟项目走');
+    assert.equal(moved.profile.workspace, base.profile.workspace, '本地目录不变');
+    assert.equal(moved.name, 'demo');
+  });
+});
+
+test('--server：名字不存在直接报错，不退回默认机器', async () => {
+  await withTable({
+    default: 'demo',
+    servers: { 'srv-a': { host: 'a.example', deployerCommand: deployer } },
+    profiles: { demo: { server: 'srv-a', app: 'demo' } },
+  }, file => {
+    assert.throws(() => loadProfile(undefined, file, 'srv-typo'), /未知服务器：srv-typo/);
+  });
+});
+
+test('--server：给了空字符串等于不指定', () => {
+  const profile = { host: 'a.example', deployerCommand: deployer, app: 'demo' };
+  assert.equal(applyServer(profile, { 'srv-a': { host: 'b.example', deployerCommand: deployer } }, ''), profile);
+  assert.equal(applyServer(profile, {}, undefined), profile);
 });

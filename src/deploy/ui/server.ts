@@ -11,7 +11,7 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from '
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { loadProfileTable, packRelease } from '../local.ts';
+import { applyServer, loadProfileTable, packRelease } from '../local.ts';
 import { DeployError } from '../errors.ts';
 import { createDeployClient, type DeployClient } from '../client.ts';
 import type { DeployProfile, DeployServer } from '../contracts.ts';
@@ -363,12 +363,8 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
   function serverProfile(project: UiProject, serverId: unknown): DeployProfile {
     const key = typeof serverId === 'string' ? serverId.trim() : '';
     if (key === '') return project.profile;
-    const server = servers[key];
-    if (server === undefined) {
-      const known = Object.keys(servers).join(', ') || '（空）';
-      throw new DeployError('INVALID_REQUEST', `未知服务器：${key}。已配置：${known}`);
-    }
-    return { ...server, app: project.app };
+    // 与 CLI 走同一套解析：只换连接，app 跟项目走。
+    return applyServer({ ...project.profile, app: project.app }, servers, key);
   }
 
   /** 客户端按「项目 + 服务器」缓存：同一台机器同一账号才能复用。 */
