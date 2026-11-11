@@ -108,6 +108,14 @@ if (profileFile === undefined) {
   process.stderr.write('[airlock-ui] 档案来自环境变量，控制台的「添加项目」会不可用（无法写回）\n');
 }
 
+// 档案是「只读一份」还是「两份合并」，要告诉前端——不然用户看不到项目内那份的项目，
+// 会以为项目丢了（典型场景：设了 AIRLOCK_DEPLOY_PROFILES_FILE，项目内 config 就永远不参与）。
+const profilesExplicit = Boolean(
+  (options.profiles !== undefined && options.profiles !== '')
+  || (process.env.AIRLOCK_DEPLOY_PROFILES_FILE ?? '') !== ''
+  || (process.env.AIRLOCK_DEPLOY_PROFILES ?? '') !== '',
+);
+
 // 默认每次随机，避免端口被别的页面猜到；要书签就传 --token 或 AIRLOCK_UI_TOKEN。
 const token = options.token !== '' ? options.token : randomBytes(18).toString('hex');
 
@@ -124,6 +132,7 @@ try {
     ...(profileFile === undefined ? {} : { profilesFile: profileFile }),
     ...(options.profiles === undefined || options.profiles === '' ? {} : { profilesPath: options.profiles }),
     ...(options.app === '' ? {} : { fallbackApp: options.app }),
+    profilesExplicit,
     ...(profileFile === undefined ? {} : { profileFile }),
     ...(baseProfile === undefined ? {} : { baseProfile }),
   });

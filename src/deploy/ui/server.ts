@@ -41,6 +41,8 @@ export interface UiOptions {
   readonly profileFile?: string;
   /** 新项目继承的连接信息（host/user/key 等）。 */
   readonly baseProfile?: DeployProfile;
+  /** 档案来自 --profiles / 环境变量时为 true：此时项目内 config 不参与合并。 */
+  readonly profilesExplicit?: boolean;
   /** 本机 Airlock 安装目录，写进「接入新服务器」的提示词。 */
   readonly airlockRoot?: string;
   /** 实际生效的档案文件（真实路径才会传），提示词里要写它而不是猜一个位置。 */
@@ -400,13 +402,22 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
 
   async function handleOverview(project: UiProject, serverId: unknown, response: ServerResponse): Promise<void> {
     const client = clientFor(project, serverId);
-    const [status, list, git, dirty] = await Promise.all([
-      client.call({ op: 'status', app: project.app }).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
+    // 不带 app 的 status 会返回这台机器上配置的所有应用——项目下拉要用它补全。
+    const [all, list, git, dirty] = await Promise.all([
+      client.call({ op: 'status' }).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
       client.call({ op: 'list', app: project.app }).catch(() => null),
       gitLog(project.workspace),
       gitStatus(project.workspace),
     ]);
-    const statusData = status as Record<string, unknown>;
+    const allData = all as { apps?: Array<Record<string, unknown>>; error?: string };
+    const statusData = (allData.error !== undefined
+      ? { error: allData.error }
+      : (allData.apps ?? []).find(item => item.app === project.app) ?? {}) as Record<string, unknown>;
+    const serverApps = (allData.apps ?? []).map(item => ({
+      id: String(item.app ?? ''),
+      root: typeof item.root === 'string' ? item.root : null,
+      current: typeof item.current === 'string' ? item.current : null,
+    }));
     const listData = list as Record<string, unknown> | null;
     let log: string[] = [];
     try {
@@ -419,8 +430,10 @@ export async function startUiServer(options: UiOptions): Promise<UiServer> {
       project: project.name,
       projects: projectSummary(),
       servers: serverSummary(),
+      serverApps,
       selectedServer: typeof serverId === 'string' ? serverId : '',
       profilesFile: options.profilesFile ?? '',
+      profilesExplicit: options.profilesExplicit === true,
       reloadError,
       app: project.app,
       workspace: project.workspace,

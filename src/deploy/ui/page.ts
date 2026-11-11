@@ -380,8 +380,11 @@ export function renderPage(options: PageOptions): string {
         var d = res.body;
         overviewData = d;
         APP = d.app || '';
-        if (d.projects && d.projects.length) rebuildProjectSelect(d.projects);
+        if (d.projects && d.projects.length) rebuildProjectSelect(d.projects, d.serverApps);
         rebuildServerSelect(d.servers || [], currentServer);
+        q('project-select').title = d.profilesExplicit
+          ? '档案只读 ' + (d.profilesFile || '指定的那一份') + '（--profiles 或环境变量），项目内 config 未参与合并'
+          : '切换项目';
         if (d.reloadError){
           toast('档案读取失败，仍在用启动时那份：' + d.reloadError, 'err');
         }
@@ -561,7 +564,14 @@ export function renderPage(options: PageOptions): string {
 
   q('project-select').addEventListener('change', function(){
     if (busy) return;
-    currentProject = q('project-select').value;
+    var value = this.value;
+    if (value.indexOf('__server__:') === 0){
+      var appId = value.slice('__server__:'.length);
+      this.value = currentProject;
+      openAddProject(appId);
+      return;
+    }
+    currentProject = value;
     q('git-panel').innerHTML = '<div class="skel"></div><div class="skel"></div>';
     q('rel-panel').innerHTML = '<div class="skel"></div><div class="skel"></div>';
     q('log').textContent = '加载中…';
@@ -598,17 +608,50 @@ export function renderPage(options: PageOptions): string {
   });
 
   // ---- 添加项目 ----
-  function rebuildProjectSelect(list){
+  /**
+   * 项目下拉 = 本地档案里的项目 + 当前服务器上有、但本地还没配目录的应用。
+   * 后者选中会打开「＋ 项目」并预填 app——发布需要本地目录，光有 app id 发不了。
+   * 本地项目也会标出「此服务器无此应用」，免得切机器后对着一个不存在的 app 发版。
+   */
+  function rebuildProjectSelect(list, serverApps){
     var sel = q('project-select');
+    var apps = serverApps || [];
+    var onThisServer = {};
+    for (var k = 0; k < apps.length; k++) onThisServer[apps[k].id] = true;
+
+    var covered = {};
     var html = '';
     for (var i = 0; i < list.length; i++){
       var item = list[i];
+      covered[item.app] = true;
+      var mark = onThisServer[item.app] ? '' : ' · 此服务器无此应用';
       html += '<option value="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) +
-              ' · ' + escapeHtml(item.app) + '</option>';
+              ' · ' + escapeHtml(item.app) + mark + '</option>';
     }
+
+    var extra = '';
+    for (var j = 0; j < apps.length; j++){
+      var app = apps[j];
+      if (!app.id || covered[app.id]) continue;
+      extra += '<option value="__server__:' + escapeHtml(app.id) + '">' +
+               escapeHtml(app.id) + ' · 服务器上有，本地未配置</option>';
+    }
+    if (extra) html += '<option disabled>──────────</option>' + extra;
+
     sel.innerHTML = html;
-    sel.style.display = list.length <= 1 ? 'none' : '';
+    sel.style.display = (list.length + (extra ? 1 : 0)) <= 1 ? 'none' : '';
     sel.value = currentProject;
+  }
+
+  function openAddProject(appId){
+    q('add-path').value = '';
+    q('add-name').value = appId || '';
+    q('add-app').value = appId || '';
+    q('add-path-hint').textContent = appId
+      ? '给服务器上的应用 ' + appId + ' 配一个本地目录'
+      : '默认从桌面开始，可以切到任意盘符';
+    q('add-dlg').showModal();
+    q('add-path').focus();
   }
 
   function guessName(path){
@@ -617,14 +660,7 @@ export function renderPage(options: PageOptions): string {
     return base.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
   }
 
-  q('btn-add').addEventListener('click', function(){
-    q('add-path').value = '';
-    q('add-name').value = '';
-    q('add-app').value = '';
-    q('add-path-hint').textContent = '默认从桌面开始，可以切到任意盘符';
-    q('add-dlg').showModal();
-    q('add-path').focus();
-  });
+  q('btn-add').addEventListener('click', function(){ openAddProject(''); });
 
   /**
    * 浏览器只能给出文件夹名，让服务端去常用位置找真实路径。
