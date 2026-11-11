@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Provision a Windows server for Airlock deploys (dedicated account + sshd gate).
@@ -8,8 +8,9 @@
   supplied public key, lays out the deploy directory, generates the deploy
   launcher, and pins that account to the deployer through sshd ForceCommand.
 
-  The account is deliberately NOT added to Administrators: it can only ever
-  run the deployer. Your interactive/RDP account is never touched.
+  The account is deliberately NOT added to Administrators unless -GrantAdministrator
+  is passed: bare-process hosting (schtasks /ru SYSTEM) needs it, and a non-admin
+  cannot do it. Your interactive/RDP account is never touched either way.
 
   Idempotent: safe to re-run. The sshd_config is backed up, validated with
   `sshd -t`, and restored automatically if the new configuration is invalid.
@@ -29,6 +30,12 @@
 .PARAMETER SkipSshd
   Do not modify sshd_config (key + account + directories only).
 
+.PARAMETER GrantAdministrator
+  Also add the deploy account to Administrators. Needed for bare-process hosting
+  on Windows (schtasks /ru SYSTEM, CIM): a non-admin cannot start or trigger jobs
+  owned by SYSTEM. This trades account-level isolation for the ability to run the
+  app at all — see docs/DEPLOY.md "受限账号的权限现实".
+
 .PARAMETER DryRun
   Print what would be done, change nothing.
 
@@ -41,6 +48,7 @@ param(
     [string]$DeployRoot = 'C:\airlock',
     [string]$NodePath = '',
     [switch]$SkipSshd,
+    [switch]$GrantAdministrator,
     [switch]$DryRun
 )
 
@@ -51,6 +59,24 @@ $Marker = "# --- airlock deploy account: $AccountName ---"
 
 function Write-Step([string]$Message) {
     Write-Host "[provision] $Message"
+}
+
+function Ensure-AllowGroup([string]$Name) {
+    # sshd 的 AllowGroups 是白名单：账号不在其中任何一个组里时，认证阶段就拒掉，
+    # 日志写 "none of user's groups are listed in AllowGroups"，看着像密钥问题。
+    # 中文 Windows 更绕：本地组叫「OpenSSH 用户」，配置里写的是英文 "openssh users"，
+    # 按名字永远匹配不上 —— 所以把自建的英文组补进白名单才是通用解。
+    $lines = @(Get-Content -Path $SshdConfig)
+    $index = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*AllowGroups\s+(.+)$') { $index = $i; break }
+    }
+    if ($index -lt 0) { return }
+    $value = $Matches[1]
+    if ($value -match "(^|\s)`"?$([regex]::Escape($Name))`"?(\s|$)") { return }
+    $lines[$index] = "AllowGroups $value $Name"
+    Set-Content -Path $SshdConfig -Value $lines -Encoding ASCII
+    Write-Step "AllowGroups += $Name"
 }
 
 function Assert-Administrator {
@@ -113,6 +139,14 @@ if ($null -eq $existingUser) {
     Write-Step "local user $AccountName already exists, reusing it"
 }
 
+if ($GrantAdministrator -and -not $DryRun) {
+    # Bare-process hosting: schtasks /ru SYSTEM、CIM 创建进程都需要管理员权限。
+    Add-LocalGroupMember -Group 'Administrators' -Member $AccountName -ErrorAction SilentlyContinue
+    Write-Step "added $AccountName to Administrators (-GrantAdministrator)"
+} elseif ($GrantAdministrator) {
+    Write-Step "would add $AccountName to Administrators (-GrantAdministrator)"
+}
+
 if (Test-AccountInAdministrators $AccountName) {
     Write-Step "WARNING: $AccountName is in Administrators; sshd will read the shared administrators_authorized_keys file"
     $isAdminAccount = $true
@@ -159,8 +193,25 @@ function Get-ProfileDirectory([string]$Name) {
 
 $keyBody = ($trimmed -split '\s+')[1]
 $profileDir = if ($DryRun) { "C:\Users\$AccountName.<machine>" } else { Get-ProfileDirectory $AccountName }
+if ($null -eq $profileDir -and -not $DryRun -and $null -ne $generatedPassword) {
+    # 刚建的账号还没有 profile 目录。它不会有任何交互式登录，所以得替它触发一次：
+    # 用一个该账号身份的进程（CreateProcessWithLogonW）让 Windows 把 profile 建出来。
+    # 不建的话，sshd 解析 %h% 会失败，密钥就算写对了也只会得到 publickey denied。
+    Write-Step "no profile for $AccountName yet; creating one with the generated password"
+    try {
+        $cred = New-Object System.Management.Automation.PSCredential(
+            $AccountName, (ConvertTo-SecureString $generatedPassword -AsPlainText -Force))
+        Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') `
+            -ArgumentList '/c', 'exit' -Credential $cred -Wait -ErrorAction Stop
+        Start-Sleep -Seconds 2
+        $profileDir = Get-ProfileDirectory $AccountName
+    } catch {
+        Write-Step "WARNING: could not create the profile automatically: $($_.Exception.Message)"
+    }
+}
 if ($null -eq $profileDir) {
-    throw "No profile directory for $AccountName yet. Log in as that account once (console/RDP), then re-run."
+    $hint = if ($generatedPassword) { " Password: $generatedPassword" } else { '' }
+    throw "No profile directory for $AccountName yet. Log in as that account once (console/RDP), then re-run.$hint"
 }
 $authFile = Join-Path $profileDir '.ssh\authorized_keys'
 Write-Step "authorize key in $authFile"
@@ -212,6 +263,8 @@ if (-not $SkipSshd) {
     $backup = "$SshdConfig.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
     Write-Step "backup sshd_config -> $backup"
     if (-not $DryRun) { Copy-Item -Path $SshdConfig -Destination $backup -Force }
+
+    if (-not $DryRun) { Ensure-AllowGroup $GroupName }
 
     # Pin this account to its own authorized_keys explicitly. The global
     # AuthorizedKeysFile is often pointed at the shared administrators file on
@@ -275,7 +328,10 @@ Write-Host "  in administrators: $isAdminAccount"
 Write-Host "  authorized_keys : $authFile"
 Write-Host "  deploy root     : $DeployRoot"
 Write-Host "  launcher        : $launcher"
-if (-not $SkipSshd) { Write-Host "  sshd gate       : ForceCommand -> $launcher (PermitTTY no)" }
+if (-not $SkipSshd) {
+    Write-Host "  sshd gate       : ForceCommand -> $launcher (PermitTTY no)"
+    Write-Host "  AllowGroups     : $GroupName 已并入白名单（没有这一条会是 publickey denied）"
+}
 if ($generatedPassword) {
     Write-Host "  generated password: $generatedPassword"
     Write-Host '  (store or discard it; the account is meant to authenticate by key only)'

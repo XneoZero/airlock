@@ -115,7 +115,8 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 & C:\airlock\scripts\provision-windows.ps1 `
     -PublicKey 'ssh-ed25519 AAAA... your-key' `
     -AccountName ag-ssh `
-    -NodePath C:\nodejs\node.exe
+    -NodePath C:\nodejs\node.exe `
+    -GrantAdministrator      # 裸进程托管必需，见第 0 节；走 winsw/服务方案时去掉
 ```
 
 **验证 1**：账号建出来了
@@ -137,17 +138,24 @@ ssh -i ~/.ssh/other_key ag-ssh@<IP> "echo leak"
 
 > **坑 1（最常见）**：Windows 本地用户的 profile 目录是 `C:\Users\<用户名>.<机器名>`，
 > **不是** `C:\Users\<用户名>`。key 写错位置的表现是「明明加了还是 Permission denied」。
-> 脚本会用 `ProfileList` 查真实路径，但账号**从没登录过**时注册表里没项，脚本会报错
-> 让你先登录一次。
+> 脚本会用 `ProfileList` 查真实路径；账号**从没登录过**时注册表里没项，脚本现在会
+> 用生成的随机密码起一个该账号身份的进程，把 profile 建出来。失败时才需要你手工登录一次。
 >
 > **坑 2**：如果 `sshd_config` 顶层 `AuthorizedKeysFile` 指着共享的
 > `__PROGRAMDATA__/ssh/administrators_authorized_keys`，所有账号都读同一个文件。
 > 脚本用 `Match User` 显式声明路径绕开它。
 >
-> **坑 3**：`AllowUsers` 白名单里没这个账号时，sshd 直接报 `Invalid user`——不是 key 的问题。
+> **坑 3**：`sshd_config` 里如果有 `AllowGroups`，新账号**必须属于其中某个组**，
+> 否则认证阶段就被拒，日志写 `none of user's groups are listed in AllowGroups`，
+> 看起来和密钥错误一模一样。脚本会把自建的 `airlock-deploy` 组补进白名单。
+>
+> **中文 Windows 专属**：本地组叫「**OpenSSH 用户**」，而 `sshd_config` 里写的是英文
+> `"openssh users"`，按名字永远匹配不上 —— 所以别指望把账号丢进那个组就能用，
+> 一律用自建的英文组 `airlock-deploy`。
 >
 > **坑 4**：不要把账号加进 Administrators 之前先测——管理员组账号在部分配置下会读共享
-> 密钥文件，行为和非管理员账号不同。
+> 密钥文件，行为和非管理员账号不同。加了 `-GrantAdministrator` 之后，顺便把公钥也写进
+> `C:\ProgramData\ssh\administrators_authorized_keys` 做双保险。
 
 ---
 

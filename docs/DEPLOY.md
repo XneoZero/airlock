@@ -138,6 +138,10 @@ Restart-Service sshd
 Add-LocalGroupMember -Group 'Administrators' -Member 'ag-ssh'
 ```
 
+`provision-windows.ps1 -GrantAdministrator` 就是这条。另外记得把账号所在的**英文组**
+（`airlock-deploy`）补进 `sshd_config` 的 `AllowGroups`：中文 Windows 上本地组叫
+「OpenSSH 用户」，配置里写的 `"openssh users"` 匹配不到，账号认证阶段就会被拒。
+
 代价要说清楚：**账号级隔离失效**，`ForceCommand` 成了唯一约束。能连上这个账号的人，
 虽然拿不到 shell，但可以通过「发布一份代码」的方式让服务器执行任意指令——因为发布通道
 本来就是「上传并执行」。这条风险不会因为 `PermitTTY no` 消失。
