@@ -211,6 +211,7 @@ node bin/airlock-deploy-ui.mjs         # 或直接跑仓库里的入口
 
 档案查找顺序：`--profiles` > `AIRLOCK_DEPLOY_PROFILES_FILE` > `AIRLOCK_DEPLOY_PROFILES`（内联 JSON）
 > `~/.airlock/deploy-profiles.json` 与 `./config/deploy-profiles.json` **合并**（同名以项目内为准）。
+前三项是「只读这一份」，会**关掉合并**——项目内配的项目会看不见，所以一般不要设。
 老格式（把 `host` 直接内联在 profile 里）仍然可用。
 
 ### 接入新机器

@@ -91,6 +91,9 @@ airlock-deploy mcp                            # 给 MCP 客户端的 stdio 服�
 - 档案每个请求前都会重读，改了不用重启控制台。
 - 查找顺序：`--profiles` > `AIRLOCK_DEPLOY_PROFILES_FILE` > `AIRLOCK_DEPLOY_PROFILES`（内联 JSON）
   > `~/.airlock/deploy-profiles.json` 与 `./config/deploy-profiles.json` 合并（同名以项目内为准）。
+- ⚠️ 前三项是「只读这一份」，会**关掉合并**：设了 `AIRLOCK_DEPLOY_PROFILES_FILE` 之后，
+  项目内 `config/deploy-profiles.json` 里的项目会凭空消失且没有报错。
+  发现「项目少了」先查这三个来源，别怀疑档案被删了。
 
 ## 改服务器上的落点
 

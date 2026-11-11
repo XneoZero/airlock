@@ -391,14 +391,29 @@ Airlock 是独立工具，不是要复制进每个项目的库。三种用法，
 ```powershell
 cd C:\path\to\Airlock
 npm link                      # 把 airlock-deploy 链接成全局命令
+```
 
-# 档案只放一份，所有项目共用
+**推荐：不设任何环境变量。** 工具默认同时读用户级和项目内的档案并合并：
+
+- 用户级 `~/.airlock/deploy-profiles.json` —— 这台机器上配过的所有项目
+- 项目内 `./config/deploy-profiles.json` —— 这个仓库固定的项目
+
+两份都参与，同名以项目内为准。这样既能在任何目录跑，又能让仓库自带它的项目配置。
+
+想把项目级档案挪成"所有项目共用一份"，再额外做：
+
+```powershell
 New-Item -ItemType Directory -Force $HOME\.airlock | Out-Null
 Copy-Item config\deploy-profiles.json $HOME\.airlock\deploy-profiles.json
-
-# 告诉工具去哪找档案（写进用户环境变量，新终端生效）
 [Environment]::SetEnvironmentVariable('AIRLOCK_DEPLOY_PROFILES_FILE', "$HOME\.airlock\deploy-profiles.json", 'User')
 ```
+
+> ⚠️ 一旦设了 `AIRLOCK_DEPLOY_PROFILES_FILE`（或用了 `--profiles`、内联的 `AIRLOCK_DEPLOY_PROFILES`），
+> 工具就**只读那一份，不再合并**项目内的 `config/deploy-profiles.json`。
+> 结果是项目内配的项目凭空消失，而命令行与界面上都不会提示原因——
+> 只会在服务器下拉里以「服务器上有，本地未配置」的形式露一面。
+> 控制台会把这种情况写在项目下拉的 `title` 里，鼠标停上去能看到实际读的是哪份。
+> 所以除非你确实只想用一份全局档案，否则别设它。
 
 之后**在任何项目目录**里：
 
