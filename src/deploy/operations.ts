@@ -15,7 +15,7 @@ import { VERSION_RE } from './contracts.ts';
 import { manifestOfDirectory, unpackArchive } from './archive.ts';
 import { createBackup, restoreBackup } from './backup.ts';
 import { DeployError, messageOf } from './errors.ts';
-import { runCommand, startApp, stopApp, waitHealthy } from './runtime.ts';
+import { runCommand, startApp, stopApp, waitHealthy, waitPortReleased } from './runtime.ts';
 import {
   appendLog, currentLink, currentVersionOnDisk, ensureAppDirs, findRecord, incomingDir,
   previousDeployed, readState, releaseDir, releasesDir, setCurrent, upsertRecord, writeState,
@@ -146,6 +146,21 @@ export async function activateVersion(ctx: DeployContext, app: AppConfig, params
 
   const stop = await stopApp(app.root, app.runtime.stop);
   await appendLog(app.root, `stop：${stop.detail}`);
+
+  // 停完先确认端口真的空了，再动 current。没空就说明旧进程还在跑：
+  // 这时切过去，新进程会抢端口失败，而健康检查探到的还是旧进程——发布假成功。
+  const released = await waitPortReleased(app.health);
+  if (released !== null) {
+    await appendLog(app.root, `端口检查：${released.detail}`);
+    if (!released.ok) {
+      await markFailed(ctx, app.root, version, `停止旧版本失败：${released.detail}`);
+      throw new DeployError('STOP_FAILED', `${released.detail}；current 仍是 ${previous ?? '(无)'}，未切换`, {
+        version,
+        previous: previous ?? null,
+      });
+    }
+  }
+
   await switchCurrent(app.root, version);
 
   state = setCurrent(state, version);
@@ -223,6 +238,12 @@ export async function rollbackVersion(ctx: DeployContext, app: AppConfig, params
 
   const stop = await stopApp(app.root, app.runtime.stop);
   await appendLog(app.root, `rollback 开始：${onDisk ?? '(无)'} -> ${target}；stop：${stop.detail}`);
+
+  const released = await waitPortReleased(app.health);
+  if (released !== null && !released.ok) {
+    await appendLog(app.root, `端口检查失败：${released.detail}`);
+    throw new DeployError('STOP_FAILED', `${released.detail}；current 仍是 ${onDisk ?? '(无)'}，未切换`, { version: target });
+  }
 
   const restore = params.restoreBackup === true || app.restoreBackupOnRollback === true;
   let restored: string | null = null;

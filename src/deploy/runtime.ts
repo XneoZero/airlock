@@ -8,6 +8,7 @@
  *    只有「通过」算成功；超时也必须回 failing，不能让发布假成功。
  */
 import { spawn } from 'node:child_process';
+import { connect } from 'node:net';
 import { join } from 'node:path';
 import type { DeployCommand, HealthCheck } from './contracts.ts';
 
@@ -152,4 +153,60 @@ export async function waitHealthy(root: string, health: HealthCheck | undefined)
     if (Date.now() >= deadline) return { ok: false, detail: `${last.detail}（${attempts} 次探测后超时）`, attempts };
     await new Promise(resolve => setTimeout(resolve, intervalMs));
   }
+}
+
+/**
+ * stop 之后确认端口真的释放了。
+ *
+ * 健康检查只能证明「这个端口上有东西在响应」，证明不了「响应的是新版本」。
+ * stop 没生效时（pid 文件丢了、杀错进程、脚本没权限），新版本其实起不来，
+ * 但旧进程还占着端口，health 照样返回 200 —— 发布流程就会把「根本没换版本」记成成功。
+ * 这一步补的就是这个缺口：端口不放，就别往下切 current。
+ *
+ * 只检查回环地址：health.url 指向外部依赖时（比如探第三方健康页），
+ * 「stop 之后它还在」是正常的，不能据此判失败。
+ */
+export async function waitPortReleased(health: HealthCheck | undefined, timeoutMs = 3000): Promise<StepOutcome | null> {
+  if (health?.url === undefined) return null;
+  let target: URL;
+  try {
+    target = new URL(health.url);
+  } catch {
+    return null;
+  }
+  const host = target.hostname;
+  const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+  if (!loopback) return null;
+  const port = target.port === '' ? (target.protocol === 'https:' ? 443 : 80) : Number(target.port);
+  if (!Number.isInteger(port) || port <= 0) return null;
+
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const open = await portOpen(host, port, 400);
+    if (!open) return { ok: true, detail: `端口 ${port} 已释放` };
+    if (Date.now() >= deadline) {
+      return {
+        ok: false,
+        detail: `stop 之后端口 ${port} 仍在监听：旧进程没停下，健康检查会探到它，把「没换版本」判成成功`,
+      };
+    }
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+}
+
+/** 只探「能不能连上」，不发送任何数据——不打扰可能还活着的进程。 */
+function portOpen(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const socket = connect({ host, port });
+    let settled = false;
+    const finish = (open: boolean): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(open);
+    };
+    socket.setTimeout(timeoutMs, () => finish(false));
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+  });
 }
