@@ -65,6 +65,8 @@ npm test            # 75 个测试，不连服务器、不读 config/
 npm run typecheck
 ```
 
+想先看界面：双击 `airlock-ui.cmd`（或 `./airlock-ui.sh`），见 [控制台](#控制台)。
+
 ### 通道一：`remote-dev`（改服务器上的文件）
 
 服务器侧配置 `broker.json`：
@@ -150,12 +152,23 @@ airlock-deploy status  --app web --probe                         # 现在跑的�
 
 ## 控制台
 
-不想敲命令时：
+不想敲命令时，直接用仓库根目录的启动入口：
+
+| 平台 | 入口 |
+|---|---|
+| Windows | 双击 `airlock-ui.cmd`（参数可直接跟在后面，如 `airlock-ui.cmd --app web`） |
+| macOS / Linux | `./airlock-ui.sh`（首次可能需要 `chmod +x airlock-ui.sh`） |
+
+也可以用命令：
 
 ```bash
-airlock-deploy ui --app web
-# 控制台已启动：http://127.0.0.1:7788/?t=xxxx
+airlock-deploy ui --app web            # 全局安装后
+node bin/airlock-deploy-ui.mjs         # 或直接跑仓库里的入口
 ```
+
+> 控制台是本地服务端渲染的单页，**没有 `index.html` 可以双击打开**：
+> 页面由 `src/deploy/ui/page.ts` 在请求时生成，一次性 token 也在那时下发。
+> 上面的两个脚本就是入口。
 
 纯本地服务（只绑 `127.0.0.1`，一次性 token 进 URL），一个页面做四件事：
 

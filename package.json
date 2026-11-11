@@ -56,6 +56,8 @@
     "docs",
     "examples",
     "skills",
+    "airlock-ui.cmd",
+    "airlock-ui.sh",
     "README.md",
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",
