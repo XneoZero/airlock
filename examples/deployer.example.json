@@ -18,7 +18,8 @@
         "intervalMs": 500
       },
       "install": { "command": "npm", "args": ["ci", "--omit=dev"], "timeoutMs": 300000 },
-      "backupPaths": ["shared/data", "shared/config"],
+      "sharedPaths": ["data", "assets/img/uploads"],
+      "backupPaths": ["shared"],
       "keepBackups": 5,
       "restoreBackupOnRollback": false
     },

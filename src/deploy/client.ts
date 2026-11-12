@@ -95,8 +95,7 @@ export function createDeployClient(options: DeployClientOptions): DeployClient {
         child.on('close', (code: number | null) => {
           const firstLine = stdout.split(/\r?\n/).find(line => line.trim() !== '') ?? '';
           if (firstLine === '') {
-            const hint = stderr.trim().split(/\r?\n/).slice(0, 3).join(' / ');
-            finish(new DeployError('INTERNAL', `部署器没有返回响应（ssh 退出码 ${code ?? '?'}）${hint === '' ? '' : `：${hint}`}`));
+            finish(new DeployError('INTERNAL', explainSshFailure(stderr, code)));
             return;
           }
           let raw: unknown;
@@ -137,4 +136,32 @@ export function createDeployClient(options: DeployClientOptions): DeployClient {
       });
     },
   };
+}
+
+/**
+ * 把 ssh 的 stderr 归成「下一步查什么」，而不是把原始文本丢给用户。
+ *
+ * 这几条都是真机接入时最常撞到的，每一条的处理办法完全不同；混成一句
+ * 「部署器没有返回响应」只会让人去翻 sshd 日志。
+ */
+export function explainSshFailure(stderr: string, code: number | null): string {
+  const base = `部署器没有返回响应（ssh 退出码 ${code ?? '?'}）`;
+  const text = stderr.toLowerCase();
+  if (text.includes('connection refused')) {
+    return `${base}：22 端口没有监听——sshd 没启动，或者改了端口`;
+  }
+  if (text.includes('connection timed out') || text.includes('operation timed out')) {
+    return `${base}：连接超时——云安全组或防火墙没放行 22，这一步只有机器主人能做`;
+  }
+  if (text.includes('permission denied')) {
+    return `${base}：认证被拒——密钥、账号所在组（AllowGroups）、ForceCommand 三者之一没配好；看服务器 sshd 日志`;
+  }
+  if (text.includes('host key verification failed') || text.includes('remote host identification has changed')) {
+    return `${base}：主机键变了（机器重装过）——先 ssh-keygen -R <主机> 再试`;
+  }
+  if (text.includes('could not resolve hostname')) {
+    return `${base}：主机名解析不了——检查 host 拼写或 DNS`;
+  }
+  const hint = stderr.trim().split(/\r?\n/).slice(0, 3).join(' / ');
+  return hint === '' ? base : `${base}：${hint}`;
 }

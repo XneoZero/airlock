@@ -160,6 +160,7 @@ Add-LocalGroupMember -Group 'Administrators' -Member 'ag-ssh'
 │   └── 20261108-090000-9f8e7d6/
 ├── current -> releases/...   正在运行的版本（Linux 符号链接 / Windows junction）
 ├── backups/                  发布前数据快照（配置了 backupPaths 才有）
+├── shared/                   跨版本的运行时数据；版本目录里的同名路径链到这里（配置了 sharedPaths 才有）
 │   └── 20261110-182233-a1b2c3d.tar.gz
 ├── incoming/                 上传中的临时包，装完即删
 ├── state.json                当前版本 + 版本历史
@@ -234,7 +235,8 @@ copy C:\airlock\config\deployer.json C:\airlock\config\deployer.json.bak
         "intervalMs": 500
       },
       "install": { "command": "npm", "args": ["ci", "--omit=dev"], "timeoutMs": 300000 },
-      "backupPaths": ["shared/data", "shared/config"],
+      "sharedPaths": ["data", "assets/img/uploads"],
+      "backupPaths": ["shared"],
       "keepBackups": 5,
       "restoreBackupOnRollback": false
     }
@@ -254,10 +256,37 @@ copy C:\airlock\config\deployer.json C:\airlock\config\deployer.json.bak
 | `health.url` / `health.command` | 轮询探活；两个都给时优先 `url` |
 | `install` | 解压后、激活前跑一次（装依赖、编译），在版本目录里执行 |
 | `backupPaths` | 相对 root 的目录，激活前打包；空表示只回代码 |
+| `sharedPaths` | 相对**版本目录**的路径，激活时换成指向 `<root>/shared/<路径>` 的链接，运行时数据靠它跨版本保留 |
 | `keepReleases` | 保留多少个版本目录，默认 5；当前在用的永远不删 |
 | `restoreBackupOnRollback` | 回滚时是否默认恢复数据，默认 `false` |
 
 命令对象里的 `cwd` 只能是 `current` 或 `root`，不接受任意路径——否则路径注入面又打开了。
+
+### 有状态应用：`sharedPaths` 让数据跨版本活下来
+
+发布包解出来的是**干净目录**，所以「客户留言、上传的图片视频、SQLite 库」这类运行时数据
+不能放在版本目录里——发一版就跟着旧版本沉底了。
+
+以前的做法是在 `runtime.start` 里手写脚本，把版本目录里的 `data/` 换成指向
+`<root>/shared/data` 的 junction（Windows）或 symlink（Linux）。每个应用重写一遍，
+还容易漏掉某个目录（真实事故：某站点的上传图片目录不在 hook 里，第二次发版全丢）。
+
+现在配一行就够，激活时统一处理（`rollback` 也一样）：
+
+```json
+"sharedPaths": ["data", "assets/img/uploads"]
+```
+
+行为约定：
+
+- 版本目录里的 `data/` → 指向 `<root>/shared/data` 的链接，**历史数据留在 shared 里**；
+- 首次发布时如果打包带了 `data/`（`--exclude` 忘了排除），**内容会整体迁进 shared**，不丢；
+- `shared/` 已有内容时以 shared 为准，版本包里那份直接丢弃，并在 `deploy.log` 记一行；
+- 发布前记得在本地打包时排除这些目录，否则每版都白传几百 MB：
+  `airlock-deploy release --app web --source . --exclude data,assets/img/uploads`
+- 备份也指 shared 就行：`"backupPaths": ["shared"]`。
+
+`sharedPaths` 只认相对路径，绝对路径和 `..` 会被契约直接拒掉。
 
 ## Windows 裸进程托管：四个真机才暴露的坑
 

@@ -70,6 +70,19 @@ export const appConfigSchema = z.object({
   /** 解压后、激活前的准备命令（例如 npm ci --omit=dev），cwd 默认是版本目录。 */
   install: deployCommandSchema.optional(),
   keepReleases: z.number().int().min(1).max(50).optional(),
+  /**
+   * 相对版本目录的路径，激活时替换成指向 `<root>/shared/<路径>` 的链接
+   * （Windows junction / Linux symlink）。运行时数据靠它跨版本保留——
+   * 不配这个，每发一版都是一个干净目录，上一版的客户数据、上传文件就跟着旧版本沉底了。
+   */
+  sharedPaths: z.array(
+    z.string().min(1).max(200)
+      .regex(/^[A-Za-z0-9._/-]+$/, '只能是相对路径：字母、数字以及 . _ - /')
+      .refine(
+        value => !value.startsWith('/') && !/^[A-Za-z]:/.test(value) && !value.split('/').includes('..'),
+        '不能是绝对路径，也不能含 ..',
+      ),
+  ).max(8).optional(),
   /** 相对 root 的目录，发布前打包到 backups/<version>.tar.gz；空表示只回代码。 */
   backupPaths: z.array(z.string().min(1).max(200)).max(8).optional(),
   keepBackups: z.number().int().min(1).max(50).optional(),

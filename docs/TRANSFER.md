@@ -108,7 +108,26 @@ curl.exe -fsS -L -o C:\Windows\Temp\airlock.zip `
   https://ghproxy.net/https://codeload.github.com/XneoZero/airlock/zip/refs/heads/main
 ```
 
-## 5. 一条命令接入整台 Windows 机器
+## 5. 传 Airlock 本体：打包 `node_modules` 比在服务器上装依赖更快
+
+服务器网络差的时候，`npm ci` 会卡到让人怀疑人生。实测更快的做法是**在本机把依赖装好一起传**：
+
+```powershell
+# 本机：bin + src + node_modules + 两个清单，一个包
+tar.exe -czf "$env:TEMP\airlock-core.tgz" -C C:\path\to\Airlock `
+    bin src node_modules package.json package-lock.json
+
+# 服务器（已有 SSH 账号时）
+scp "$env:TEMP\airlock-core.tgz" ag-ssh@<IP>:C:/airlock/airlock-core.tgz
+ssh ag-ssh@<IP> "tar -xzf C:\airlock\airlock-core.tgz -C C:\airlock"
+```
+
+- 服务器上完全不需要编译，`node_modules` 直接能用（`bin` 跑的是 `.ts`，靠 Node 内置类型剥离）；
+- 生产部署可以只传 `--omit=dev` 装出来的那份；
+- **顺序很重要**：得先有能登录的账号才能 scp。首次接入仍然要走
+  `bootstrap-windows.ps1`（或手工装 Node），之后更新代码就用这条路。
+
+## 6. 一条命令接入整台 Windows 机器
 
 把上面这些都封在 `scripts/bootstrap-windows.ps1` 里了：
 

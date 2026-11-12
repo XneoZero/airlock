@@ -47,6 +47,60 @@ async function switchCurrent(root: string, version: string): Promise<void> {
   await appendLog(root, `current -> releases/${version}`);
 }
 
+/**
+ * 把运行时数据留在版本之外：版本目录里的 `sharedPaths` 换成指向 `<root>/shared/<路径>` 的链接。
+ *
+ * 为什么必须有这一层：发布包解出来的是干净目录，而客户线索、上传的图片视频、
+ * SQLite 库这些必须是「跨版本同一份」。靠 start hook 自己写 junction 能做，但每个应用都要
+ * 重写一遍、还容易漏。配在 deployer.json 里，激活时统一处理。
+ *
+ * 首次发布时如果包里带了这些目录（打包忘了排除），会把内容并进 shared 而不是扔掉；
+ * shared 已经有东西时，以 shared 为准，版本内那份直接丢弃并记一行日志。
+ */
+async function linkSharedPaths(root: string, versionDir: string, sharedPaths: readonly string[] | undefined): Promise<void> {
+  if (sharedPaths === undefined || sharedPaths.length === 0) return;
+  for (const raw of sharedPaths) {
+    const parts = raw.replace(/\\/g, '/').split('/').filter(part => part !== '' && part !== '.');
+    if (parts.length === 0) continue;
+    const rel = parts.join('/');
+    const target = join(root, 'shared', ...parts);
+    const link = join(versionDir, ...parts);
+    await mkdir(resolve(target, '..'), { recursive: true });
+
+    const linkInfo = await lstat(link).catch(() => null);
+    const targetInfo = await lstat(target).catch(() => null);
+
+    if (targetInfo === null) {
+      if (linkInfo !== null && linkInfo.isDirectory() && !linkInfo.isSymbolicLink()) {
+        // 包里自带这份数据：把它整体变成 shared 的第一份，不复制、也不丢
+        await rename(link, target);
+        await appendLog(root, `shared/${rel}：由首个版本的目录迁移而来`);
+      } else {
+        await mkdir(target, { recursive: true });
+      }
+    } else if (linkInfo !== null && !linkInfo.isSymbolicLink()) {
+      await rm(link, { recursive: true, force: true });
+      await appendLog(root, `shared/${rel} 已存在，丢弃版本内的同名目录（以 shared 为准）`);
+    }
+
+    const current = await lstat(link).catch(() => null);
+    if (current !== null) {
+      if (current.isSymbolicLink()) await unlink(link).catch(() => rmdir(link).catch(() => undefined));
+      else await rm(link, { recursive: true, force: true });
+    }
+    // 嵌套路径（assets/img）时，版本目录里可能连父目录都没有，先补出来
+    await mkdir(resolve(link, '..'), { recursive: true });
+    await symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  await appendLog(root, `shared 链接已就位：${sharedPaths.join('、')}`);
+}
+
+/** 激活/回滚共用：先切 current，再把 sharedPaths 挂进版本目录。 */
+async function prepareVersion(root: string, version: string, sharedPaths: readonly string[] | undefined): Promise<void> {
+  await switchCurrent(root, version);
+  await linkSharedPaths(root, resolve(releasesDir(root), version), sharedPaths);
+}
+
 /** 把请求头里声明的字节数写进临时文件，返回落盘大小。超限中途即失败，不等到写完。 */
 export async function receiveArchive(receiver: ArchiveReceiver, size: number, target: string): Promise<number> {
   await mkdir(resolve(target, '..'), { recursive: true });
@@ -161,7 +215,7 @@ export async function activateVersion(ctx: DeployContext, app: AppConfig, params
     }
   }
 
-  await switchCurrent(app.root, version);
+  await prepareVersion(app.root, version, app.sharedPaths);
 
   state = setCurrent(state, version);
   state = upsertRecord(state, { ...existing, status: 'installed', backup: backup.path, note: '' });
@@ -197,7 +251,7 @@ export async function activateVersion(ctx: DeployContext, app: AppConfig, params
 async function recoverPrevious(ctx: DeployContext, app: AppConfig, previous: string | null): Promise<string> {
   if (previous === null) return '；没有上一版可回退，服务可能仍处于停止状态';
   try {
-    await switchCurrent(app.root, previous);
+    await prepareVersion(app.root, previous, app.sharedPaths);
     // 状态文件必须跟着回退，否则 status 会一直报「记录说新版本、磁盘是旧版本」。
     // 这个不一致本身就是信号：真出现了要去查是谁改了链接。
     const state = await readState(app.root);
@@ -249,7 +303,7 @@ export async function rollbackVersion(ctx: DeployContext, app: AppConfig, params
   let restored: string | null = null;
   if (restore) restored = await restoreBackup(app.root, target, app);
 
-  await switchCurrent(app.root, target);
+  await prepareVersion(app.root, target, app.sharedPaths);
   let next = setCurrent(state, target);
   const old = onDisk === null ? null : findRecord(state, onDisk);
   if (old !== null) next = upsertRecord(next, { ...old, status: 'rolled_back', note: `回滚到 ${target}`.slice(0, 300) });
