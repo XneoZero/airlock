@@ -224,7 +224,10 @@ if (command === 'mcp') {
     }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     // 第一次在某个项目发布时提醒落规范：skill 在包里、项目里没有，agent 读不到。
-    if (command === 'release' && !existsSync(join(releaseProjectDir, '.dsh', 'skills', 'airlock-deploy', 'SKILL.md'))) {
+    // airlock 仓库自己就是规范源头（skills/ 下），不必提醒它生成一份。
+    if (command === 'release'
+      && !existsSync(join(releaseProjectDir, '.dsh', 'skills', 'airlock-deploy', 'SKILL.md'))
+      && !existsSync(join(releaseProjectDir, 'skills', 'airlock-deploy', 'SKILL.md'))) {
       process.stderr.write('[deploy] 本项目还没有落地 airlock 规范：运行 `airlock-deploy skill install` 生成\n');
     }
   } catch (error) {
