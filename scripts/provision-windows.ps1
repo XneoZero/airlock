@@ -62,6 +62,7 @@ param(
     [string]$NodePath = '',
     [string]$AppId = 'app',
     [string]$AppRoot = '',
+    [ValidateSet('nested','flat','mirror')][string]$Layout = 'flat',
     [int]$HealthPort = 18080,
     [string]$EntryFile = 'server.mjs',
     [switch]$SkipSshd,
@@ -223,7 +224,7 @@ if ($DryRun) {
                 root = $AppRoot
                 # flat：root 本身就是站点入口，桌面打开应用夹看到的就是网站文件；
                 # 版本与状态在 <root 父目录>\.airlock\<app> 下。
-                layout = 'flat'
+                layout = $Layout
                 keepReleases = 5
                 runtime = [ordered]@{
                     start = [ordered]@{

@@ -26,11 +26,11 @@ export const LINK_CURRENT = 'current';
  *   `<root 父目录>/.airlock/<app 名>/`。桌面上的应用夹打开就是 index.html，
  *   不会混进一堆看不懂的目录。
  */
-export type AppLayout = 'nested' | 'flat';
+export type AppLayout = 'nested' | 'flat' | 'mirror';
 
 /** 状态根：releases/、backups/、state.json、deploy.log 都放这里。 */
 export function stateRoot(root: string, layout: AppLayout = 'nested'): string {
-  return layout === 'flat' ? join(dirname(root), '.airlock', basename(root)) : root;
+  return layout === 'nested' ? root : join(dirname(root), '.airlock', basename(root));
 }
 
 export function releasesDir(root: string): string { return join(root, DIR_RELEASES); }
@@ -42,7 +42,7 @@ export function statePath(root: string): string { return join(root, FILE_STATE);
 export function logPath(root: string): string { return join(root, FILE_LOG); }
 /** 站点入口链接：nested 是 `<root>/current`，flat 就是 root 本身。 */
 export function currentLink(root: string, layout: AppLayout = 'nested'): string {
-  return layout === 'flat' ? root : join(root, LINK_CURRENT);
+  return layout === 'nested' ? join(root, LINK_CURRENT) : root;
 }
 
 export async function ensureAppDirs(root: string, layout: AppLayout = 'nested'): Promise<void> {
@@ -50,8 +50,8 @@ export async function ensureAppDirs(root: string, layout: AppLayout = 'nested'):
   for (const dir of [releasesDir(state), backupsDir(state), incomingDir(state)]) {
     await mkdir(dir, { recursive: true });
   }
-  // flat 时 root 是链接，由 switchCurrent 负责创建，这里不能 mkdir
-  if (layout === 'nested') await mkdir(root, { recursive: true });
+  // flat 时 root 是链接，由 switchCurrent 创建；nested/mirror 的 root 是实体目录，可以建。
+  if (layout !== 'flat') await mkdir(root, { recursive: true });
 }
 
 const EMPTY_STATE: AppState = { current: null, history: [] };

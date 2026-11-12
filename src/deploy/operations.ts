@@ -6,7 +6,7 @@
  * 2. activate 先 stop、再切链接、再 start：服务停机窗口内 current 已经指向新版本，不会读到混合状态。
  * 3. 起不来就切回上一个版本并把它拉起来，然后如实报失败——服务不能因为一次发布停在停止态。
  */
-import { access, mkdir, rename, rm } from 'node:fs/promises';
+import { access, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { symlink, lstat, rmdir, unlink } from 'node:fs/promises';
@@ -14,6 +14,7 @@ import type { AppConfig, ReleaseRecord } from './contracts.ts';
 import { VERSION_RE } from './contracts.ts';
 import { manifestOfDirectory, unpackArchive } from './archive.ts';
 import { createBackup, restoreBackup } from './backup.ts';
+import { syncMirror } from './mirror.ts';
 import { DeployError, messageOf } from './errors.ts';
 import { runCommand, startApp, stopApp, waitHealthy, waitPortReleased } from './runtime.ts';
 import {
@@ -113,9 +114,16 @@ async function linkSharedPaths(root: string, versionDir: string, sharedPaths: re
   await appendLog(root, `shared 链接已就位：${sharedPaths.join('、')}`);
 }
 
-/** 激活/回滚共用：先切站点入口，再把 sharedPaths 挂进版本目录。 */
+/** 激活/回滚共用：nested/flat 切入口，mirror 直接把内容同步到 root。 */
 async function prepareVersion(root: string, version: string, sharedPaths: readonly string[] | undefined, layout: AppLayout = 'nested'): Promise<void> {
   const state = stateRoot(root, layout);
+  if (layout === 'mirror') {
+    // 没有版本目录/链接：把这次发布的内容镜像到 root，再把数据目录链回 shared。
+    const result = syncMirror(resolve(releasesDir(state), version), root, sharedPaths ?? []);
+    await linkSharedPaths(state, root, sharedPaths);
+    await appendLog(state, `mirror 同步完成：写入 ${result.written} 个文件，删除 ${result.removed} 项`);
+    return;
+  }
   await switchCurrent(root, version, layout);
   await linkSharedPaths(state, resolve(releasesDir(state), version), sharedPaths);
 }
@@ -298,6 +306,12 @@ async function markFailed(ctx: DeployContext, root: string, version: string, not
 }
 
 export async function rollbackVersion(ctx: DeployContext, app: AppConfig, params: Record<string, unknown>): Promise<unknown> {
+  if (layoutOf(app) === 'mirror') {
+    throw new DeployError(
+      'NO_PREVIOUS_VERSION',
+      'mirror 布局不在服务器保留历史版本：回退请先 git checkout 到旧提交，再 release 一次',
+    );
+  }
   await ensureAppDirs(app.root, layoutOf(app));
   const state = await readState(stateRoot(app.root, layoutOf(app)));
   const onDisk = await currentVersionOnDisk(app.root, layoutOf(app));

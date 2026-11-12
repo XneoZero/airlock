@@ -30,7 +30,7 @@ function cap(text: string): string {
 /** cwd 只有两种合法值：版本目录或应用根。 */
 export function resolveCwd(root: string, cwd: DeployCommand['cwd'], layout: AppLayout = 'nested'): string {
   // flat 布局下 root 本身就是当前版本的入口，没有 current 这一层。
-  if (layout === 'flat') return root;
+  if (layout === 'flat' || layout === 'mirror') return root;
   return cwd === 'root' ? root : join(root, 'current');
 }
 

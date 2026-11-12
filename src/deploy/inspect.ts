@@ -21,9 +21,11 @@ async function releaseDirsOnDisk(root: string): Promise<string[]> {
 
 export async function statusOfApp(ctx: DeployContext, appId: unknown, probe: boolean): Promise<unknown> {
   const app = appOf(ctx, appId);
-  const [state, onDisk, dirs] = await Promise.all([
-    readState(stateRoot(app.root, app.layout ?? 'nested')), currentVersionOnDisk(app.root, app.layout ?? 'nested'), releaseDirsOnDisk(stateRoot(app.root, app.layout ?? 'nested')),
-  ]);
+  const layout = app.layout ?? 'nested';
+  const state = await readState(stateRoot(app.root, layout));
+  // mirror 没有链接可比，当前版本只能来自 state（版本历史在 git 那边）。
+  const onDisk = layout === 'mirror' ? state.current : await currentVersionOnDisk(app.root, layout);
+  const dirs = await releaseDirsOnDisk(stateRoot(app.root, layout));
   const currentRecord = onDisk === null ? null : state.history.find(item => item.version === onDisk) ?? null;
 
   let health: { ok: boolean; detail: string } | null = null;
@@ -59,9 +61,10 @@ export async function statusAll(ctx: DeployContext): Promise<unknown> {
 
 export async function listOfApp(ctx: DeployContext, appId: unknown): Promise<unknown> {
   const app = appOf(ctx, appId);
-  const [state, onDisk, dirs] = await Promise.all([
-    readState(stateRoot(app.root, app.layout ?? 'nested')), currentVersionOnDisk(app.root, app.layout ?? 'nested'), releaseDirsOnDisk(stateRoot(app.root, app.layout ?? 'nested')),
-  ]);
+  const layout = app.layout ?? 'nested';
+  const state = await readState(stateRoot(app.root, layout));
+  const onDisk = layout === 'mirror' ? state.current : await currentVersionOnDisk(app.root, layout);
+  const dirs = await releaseDirsOnDisk(stateRoot(app.root, layout));
   const releases = dirs.map(version => {
     const record = state.history.find(item => item.version === version) ?? null;
     return {
@@ -82,8 +85,11 @@ export async function listOfApp(ctx: DeployContext, appId: unknown): Promise<unk
 export async function logsOfApp(ctx: DeployContext, appId: unknown, lines: unknown): Promise<unknown> {
   const app = appOf(ctx, appId);
   const count = typeof lines === 'number' && Number.isFinite(lines) ? Math.min(Math.max(1, Math.floor(lines)), 500) : 50;
-  const tail = await tailLog(stateRoot(app.root, app.layout ?? 'nested'), count);
-  const current = await currentVersionOnDisk(app.root, app.layout ?? 'nested');
+  const layout = app.layout ?? 'nested';
+  const tail = await tailLog(stateRoot(app.root, layout), count);
+  const current = layout === 'mirror'
+    ? (await readState(stateRoot(app.root, layout))).current
+    : await currentVersionOnDisk(app.root, layout);
   const status = await statusApp(app.root, app.runtime.status, app.layout ?? 'nested');
   return { app: appId, current, lines: tail, status: status.detail, releases: await releaseDirsOnDisk(stateRoot(app.root, app.layout ?? 'nested')) };
 }
@@ -94,8 +100,11 @@ export async function pruneReleases(ctx: DeployContext, appId: unknown, keepOver
   const keep = typeof keepOverride === 'number' && Number.isFinite(keepOverride)
     ? Math.min(Math.max(1, Math.floor(keepOverride)), 50)
     : app.keepReleases ?? 5;
-  const current = await currentVersionOnDisk(app.root, app.layout ?? 'nested');
-  const dirs = await releaseDirsOnDisk(stateRoot(app.root, app.layout ?? 'nested'));
+  const layout = app.layout ?? 'nested';
+  const current = layout === 'mirror'
+    ? (await readState(stateRoot(app.root, layout))).current
+    : await currentVersionOnDisk(app.root, layout);
+  const dirs = await releaseDirsOnDisk(stateRoot(app.root, layout));
   // 保留最新的 N 个，但当前在用的那个永远不删，哪怕它已经很旧。
   const ordered = [...dirs].sort();
   const keepers = new Set(ordered.slice(-keep));

@@ -263,6 +263,25 @@ copy C:\airlock\config\deployer.json C:\airlock\config\deployer.json.bak
 
 命令对象里的 `cwd` 只能是 `current` 或 `root`，不接受任意路径——否则路径注入面又打开了。
 
+### `mirror` 布局：服务器上就是本地目录的副本
+
+如果你的版本管理交给 git，不需要服务器保留历史，用 `"layout": "mirror"`：
+
+- 落点目录的内容和目录结构**与发布源一致**，不会多出 `releases/`、`current`、`state.json`；
+- 发布 = 把包内容镜像过去（先逐个文件原子覆盖，再删掉源里没有的），
+  `sharedPaths`（数据目录）整棵跳过，不会被删；
+- 回滚不归 Airlock 管：`rollback` 会明确拒绝并提示「先 `git checkout` 到旧提交，再发一版」；
+- 版本信息留在本地 git 里。发布时把提交号当版本号，事后能对上：
+
+```powershell
+git checkout v1.2.3
+node bin/airlock-deploy.mjs release --app web --source .\dist --version $(git rev-parse --short HEAD)
+```
+
+- 部署日志与状态仍在 `<root 父目录>/.airlock/<应用id>/`（不在落点里），排障用；
+- 代价：没有原子切换。同步到一半失败会留下半新半旧，健康检查失败也无法自动回退——
+  这是用「服务器无状态」换来的。
+
 ### `flat` 布局：桌面上的应用夹打开就是网站
 
 默认的 `nested` 布局会把 `releases/`、`current`、`state.json`、`deploy.log` 和站点文件放在同一个
