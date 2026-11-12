@@ -50,7 +50,8 @@ if (options.configPath === '') die('缺少 --config', 'Broker 不提供默认配
 
 let raw;
 try {
-  raw = JSON.parse(readFileSync(options.configPath, 'utf8'));
+  // 剥掉 UTF-8 BOM：Windows 上手工改过的配置文件常带 BOM，JSON.parse 会直接抛错。
+  raw = JSON.parse(readFileSync(options.configPath, 'utf8').replace(/^\uFEFF/, ''));
 } catch (error) {
   const missing = error !== null && typeof error === 'object' && error.code === 'ENOENT';
   die(`配置不可读：${options.configPath}`, missing ? '确认路径与权限' : '确认是合法 JSON');

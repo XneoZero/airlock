@@ -53,7 +53,9 @@ if (options.configPath === '') die('缺少 --config', '部署器不提供默认�
 
 let raw;
 try {
-  raw = JSON.parse(readFileSync(options.configPath, 'utf8'));
+  // 剥掉 UTF-8 BOM：PowerShell 5.1 的 Set-Content -Encoding utf8 会写 BOM，JSON.parse 见到它就抛错，
+  // 而这一步发生在握手之前，客户端只能看到「部署器没有返回响应」——排查时很难想到是编码问题。
+  raw = JSON.parse(readFileSync(options.configPath, 'utf8').replace(/^\uFEFF/, ''));
 } catch (error) {
   const missing = error !== null && typeof error === 'object' && error.code === 'ENOENT';
   die(`配置不可读：${options.configPath}`, missing ? '确认路径与权限' : '确认是合法 JSON');

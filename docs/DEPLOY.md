@@ -283,6 +283,19 @@ node bin/airlock-deploy.mjs release --app web --source .\dist --version $(git re
 - 代价：没有原子切换。同步到一半失败会留下半新半旧，健康检查失败也无法自动回退——
   这是用「服务器无状态」换来的。
 
+### 从 nested 切到 mirror 之前，先处理三条
+
+1. **`install` / `start` 钩子不能再往版本目录里造 junction**。镜像是「按文件覆盖、再删多余」，
+   遇到 junction 会把它当文件复制而直接失败；mirror 没有回退，失败时网站就停在半路。
+   mirror 下数据目录应该是发布源里的实体目录，不再需要 `shared` 那一层。
+2. **Windows 计划任务的运行主体必须是 SYSTEM**。`Register-ScheduledTask` 不指定 `-Principal`
+   时默认「只使用交互式」，从 ssh / deployer 这类非交互会话里 `Start-ScheduledTask` 会静默不执行
+   （任务显示「上次运行时间: N/A」），表现是启动返回 0、健康检查一路超时。
+3. **配置文件要纯 UTF-8，别带 BOM**。PowerShell 5.1 的 `Set-Content -Encoding utf8` 会写 BOM，
+   deployer 在握手前解析配置就失败，客户端只看到「部署器没有返回响应」。用
+   `[System.IO.File]::WriteAllText($path, $json, (New-Object System.Text.UTF8Encoding($false)))`。
+   v0.5.2 起 deployer 会自己剥 BOM，但其他读这个文件的地方仍可能踩到。
+
 ### `flat` 布局：桌面上的应用夹打开就是网站
 
 默认的 `nested` 布局会把 `releases/`、`current`、`state.json`、`deploy.log` 和站点文件放在同一个
