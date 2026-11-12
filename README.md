@@ -205,6 +205,10 @@ node bin/airlock-deploy-ui.mjs         # 或直接跑仓库里的入口
 想换回「root 是链接 → 当前版本」的老结构，把 `layout` 改成 `flat`（root 是链接）或删掉
 （`nested`，root 下带 `releases/current`）。
 
+mirror 下默认会「按本地对齐」——源里没有的文件会被删掉。上传目录、数据库这类运行时数据
+必须显式保护：`sharedPaths`（换成链接，数据挪到 `.airlock/<应用id>/shared/`）或
+`preservePaths`（只跳过，目录结构不变）。两者分工见 [docs/DEPLOY.md](docs/DEPLOY.md#preservepaths只保护不改目录结构)。
+
 ### 多项目与多服务器
 
 档案分三层：

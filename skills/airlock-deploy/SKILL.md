@@ -72,6 +72,20 @@ airlock-deploy mcp                            # 给 MCP 客户端的 stdio 服�
 └── deploy.log              发布日志
 ```
 
+上面这套是 `nested` 布局。布局不同，位置就不同（`status` 返回里的 `layout` 会告诉你）：
+
+| 布局 | 站点在哪 | `releases/`、`state.json`、`deploy.log` 在哪 |
+|---|---|---|
+| `nested`（旧默认） | `<root>/current` | `<root>/` |
+| `flat` | `<root>` 本身是指向当前版本的链接 | `<root 父目录>/.airlock/<应用>/` |
+| `mirror`（新机器默认） | `<root>` 就是发布源副本，**没有 current** | `<root 父目录>/.airlock/<应用>/` |
+
+mirror 下 root 里出现 `releases/`、`current`、`state.json` 说明配置并不是 mirror，别按 nested 去读。
+
+**某个应用保护了什么，看 `status` 返回的 `sharedPaths` / `preservePaths`**，不要用
+「`<root>/shared` 存不存在」去猜：mirror 与 flat 下 `shared/` 在
+`<root 父目录>/.airlock/<应用>/shared/`，根本不在 root 里。
+
 `state.json` 的 `history[].status`：`deployed` / `failed` / `rolled_back` / `installed`。
 `status` 输出里的 `consistent` 为 false 表示「记录说的版本」和「磁盘 current 指向的版本」不一致，
 这时先去服务器看 `current` 实际指向哪，不要盲目再发。
@@ -152,8 +166,8 @@ airlock 只管分发。某个项目要保护哪些数据、版本号怎么排、
 | `install` | 否 | 解压后、激活前跑（npm ci 等），cwd 是版本目录 |
 | `backupPaths` | 否 | 相对 root 的目录，发布前打包 |
 | `keepReleases` | 否 | 默认 5，当前版本永不删 |
-| `sharedPaths` | 否 | 跨版本共享的数据目录，激活时换成指向 `<root>/shared/<路径>` 的链接 |
-| `preservePaths` | 否 | 发布时整棵跳过、不建链接、不改目录结构（上游实现中，没有就先用 sharedPaths） |
+| `sharedPaths` | 否 | 跨版本共享的数据目录，激活时换成指向 `shared/<路径>` 的链接；**会改变目录结构** |
+| `preservePaths` | 否 | 发布时整棵跳过，不覆盖、不删除、**不建链接**；仅 `mirror` 布局生效（v0.6.0 起） |
 
 ### 数据保护（mirror 布局重点）
 
@@ -162,11 +176,14 @@ mirror 下服务器目录就是本地版本的副本：发版会覆盖同名文�
 
 | 字段 | 语义 | 目录结构 |
 |---|---|---|
-| `sharedPaths` | 数据移到 `<root>/shared/<路径>`，junction/symlink 链回版本目录 | 会变 |
+| `sharedPaths` | 数据移到 `shared/<路径>`，junction/symlink 链回版本目录 | 会变 |
 | `preservePaths` | 发布时整棵跳过，不覆盖不删除，也不建链接 | 不变 |
 
+- `shared/` 的位置取决于布局：`nested` 在 `<root>/shared/`，`mirror` 与 `flat` 在
+  `<root 父目录>/.airlock/<应用>/shared/`
 - 同一路径**不要**同时配在两个字段里，两个都配 `linkSharedPaths` 仍会建链接
 - 被保护的路径整棵跳过：本地新增的文件也不会写进服务器这些目录，这是预期行为
+- `preservePaths` 只在 `mirror` 下生效（其余布局每版是独立目录，本来就碰不到线上数据）
 - 保护哪些路径由项目决定并写进该项目的 skill，airlock 不内置具体路径
 
 ## 有状态服务（游戏服这类）
@@ -207,6 +224,7 @@ mirror 下服务器目录就是本地版本的副本：发版会覆盖同名文�
 | 健康检查通过，几秒后服务没了 | `Start-Process` 起的进程被 SSH 会话回收 | 用 Task Scheduler / 服务 / CIM 启动 |
 | `拒绝访问`（CIM 创建进程） | 账号不是管理员 | 提权，或预注册任务让账号只触发 |
 | `VERSION_EXISTS` | 同版本号重复发布 | 换版本号，或先删 `releases/<版本>` |
+| 配置里加了新字段后 deployer 直接拒绝启动（说它是未知字段） | 服务器上的 deployer 还是旧版；配置 schema 是严格的，未知字段整份拒绝 | **先升级服务器上的 deployer 源码，再改 `deployer.json`**。顺序反了这台机器的发布全断 |
 | `HEALTH_FAILED` 且没有上一版 | 首次发布就失败 | 看 `deploy.log`、手动确认 start 命令 |
 | 换网络后连不上 | 来源 IP 白名单 | 从 RDP/控制台改防火墙规则加新 IP |
 | `consistent: false` | 有人手动改过 `current` 链接 | 查磁盘实际指向，确认后再决定 |

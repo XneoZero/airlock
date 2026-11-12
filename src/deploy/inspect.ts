@@ -40,6 +40,10 @@ export async function statusOfApp(ctx: DeployContext, appId: unknown, probe: boo
     serverId: ctx.config.serverId,
     kind: ctx.kind,
     root: app.root,
+    layout,
+    // 保护了哪些路径要能在 status 里直接看到——不然只能翻服务器上的 deployer.json。
+    sharedPaths: app.sharedPaths ?? [],
+    preservePaths: app.preservePaths ?? [],
     current: onDisk,
     stateCurrent: state.current,
     consistent: onDisk === state.current,

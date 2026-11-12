@@ -114,12 +114,25 @@ async function linkSharedPaths(root: string, versionDir: string, sharedPaths: re
   await appendLog(root, `shared 链接已就位：${sharedPaths.join('、')}`);
 }
 
-/** 激活/回滚共用：nested/flat 切入口，mirror 直接把内容同步到 root。 */
-async function prepareVersion(root: string, version: string, sharedPaths: readonly string[] | undefined, layout: AppLayout = 'nested'): Promise<void> {
+/**
+ * 激活/回滚共用：nested/flat 切入口，mirror 直接把内容同步到 root。
+ *
+ * `preservePaths` 只在 mirror 下有意义：那里 root 是被镜像的目标，发版会覆盖并删除多余文件。
+ * 它和 `sharedPaths` 一起并入 `guarded` 传给 syncMirror（整棵跳过），但**不**参与
+ * linkSharedPaths——保护数据不等于改变线上目录结构。
+ */
+async function prepareVersion(
+  root: string,
+  version: string,
+  sharedPaths: readonly string[] | undefined,
+  layout: AppLayout = 'nested',
+  preservePaths: readonly string[] | undefined = undefined,
+): Promise<void> {
   const state = stateRoot(root, layout);
   if (layout === 'mirror') {
     // 没有版本目录/链接：把这次发布的内容镜像到 root，再把数据目录链回 shared。
-    const result = syncMirror(resolve(releasesDir(state), version), root, sharedPaths ?? []);
+    const guarded = [...(sharedPaths ?? []), ...(preservePaths ?? [])];
+    const result = syncMirror(resolve(releasesDir(state), version), root, guarded);
     await linkSharedPaths(state, root, sharedPaths);
     await appendLog(state, `mirror 同步完成：写入 ${result.written} 个文件，删除 ${result.removed} 项`);
     return;
@@ -242,7 +255,7 @@ export async function activateVersion(ctx: DeployContext, app: AppConfig, params
     }
   }
 
-  await prepareVersion(app.root, version, app.sharedPaths, layoutOf(app));
+  await prepareVersion(app.root, version, app.sharedPaths, layoutOf(app), app.preservePaths);
 
   state = setCurrent(state, version);
   state = upsertRecord(state, { ...existing, status: 'installed', backup: backup.path, note: '' });
@@ -278,7 +291,7 @@ export async function activateVersion(ctx: DeployContext, app: AppConfig, params
 async function recoverPrevious(ctx: DeployContext, app: AppConfig, previous: string | null): Promise<string> {
   if (previous === null) return '；没有上一版可回退，服务可能仍处于停止状态';
   try {
-    await prepareVersion(app.root, previous, app.sharedPaths, layoutOf(app));
+    await prepareVersion(app.root, previous, app.sharedPaths, layoutOf(app), app.preservePaths);
     // 状态文件必须跟着回退，否则 status 会一直报「记录说新版本、磁盘是旧版本」。
     // 这个不一致本身就是信号：真出现了要去查是谁改了链接。
     const state = await readState(stateRoot(app.root, layoutOf(app)));
@@ -336,7 +349,7 @@ export async function rollbackVersion(ctx: DeployContext, app: AppConfig, params
   let restored: string | null = null;
   if (restore) restored = await restoreBackup(stateRoot(app.root, layoutOf(app)), target, app);
 
-  await prepareVersion(app.root, target, app.sharedPaths, layoutOf(app));
+  await prepareVersion(app.root, target, app.sharedPaths, layoutOf(app), app.preservePaths);
   let next = setCurrent(state, target);
   const old = onDisk === null ? null : findRecord(state, onDisk);
   if (old !== null) next = upsertRecord(next, { ...old, status: 'rolled_back', note: `回滚到 ${target}`.slice(0, 300) });

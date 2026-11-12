@@ -83,6 +83,21 @@ export const appConfigSchema = z.object({
         '不能是绝对路径，也不能含 ..',
       ),
   ).max(8).optional(),
+  /**
+   * 只在服务器上保留、发布时不覆盖也不删除的路径（相对 root）。
+   *
+   * 与 `sharedPaths` 的分工：`sharedPaths` 会把数据搬到 `<root>/shared/<路径>` 再链回来，
+   * 服务器目录结构因此改变；这里只做保护，不建链接、不迁移目录。
+   * 仅在 `layout: 'mirror'` 下生效——其余布局每版是独立目录，本来就碰不到线上的数据。
+   */
+  preservePaths: z.array(
+    z.string().min(1).max(200)
+      .regex(/^[A-Za-z0-9._/-]+$/, '只能是相对路径：字母、数字以及 . _ - /')
+      .refine(
+        value => !value.startsWith('/') && !/^[A-Za-z]:/.test(value) && !value.split('/').includes('..'),
+        '不能是绝对路径，也不能含 ..',
+      ),
+  ).max(16).optional(),
   /** 相对 root 的目录，发布前打包到 backups/<version>.tar.gz；空表示只回代码。 */
   backupPaths: z.array(z.string().min(1).max(200)).max(8).optional(),
   keepBackups: z.number().int().min(1).max(50).optional(),

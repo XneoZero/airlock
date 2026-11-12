@@ -170,6 +170,17 @@ Add-LocalGroupMember -Group 'Administrators' -Member 'ag-ssh'
 `current` 是唯一被启动命令引用的路径，所以 `start` 的 `cwd` 写 `current` 就行，
 不用改配置就能换版本。
 
+上面是 `nested` 布局。另外两种布局把版本与状态挪出落点：
+
+| 布局 | 站点在哪 | `releases/`、`state.json`、`deploy.log`、`shared/` |
+|---|---|---|
+| `nested`（旧默认） | `<root>/current` | `<root>/` |
+| `flat` | `<root>` 本身是指向当前版本的链接 | `<root 父目录>/.airlock/<应用id>/` |
+| `mirror`（新机器默认） | `<root>` 就是发布源副本，没有 `current` | `<root 父目录>/.airlock/<应用id>/` |
+
+所以「root 里没有 `shared/`」不能当成「没配 sharedPaths」的证据——mirror / flat 下它在
+`.airlock/<应用id>/shared/`。要确认配了什么，看 `status` 返回的 `sharedPaths` / `preservePaths`。
+
 ## 改发布落点
 
 落点就是服务器配置里每个应用的 `root`。它决定 `releases/`、`backups/`、`current`
@@ -256,7 +267,8 @@ copy C:\airlock\config\deployer.json C:\airlock\config\deployer.json.bak
 | `health.url` / `health.command` | 轮询探活；两个都给时优先 `url` |
 | `install` | 解压后、激活前跑一次（装依赖、编译），在版本目录里执行 |
 | `backupPaths` | 相对 root 的目录，激活前打包；空表示只回代码 |
-| `sharedPaths` | 相对**版本目录**的路径，激活时换成指向 `<root>/shared/<路径>` 的链接，运行时数据靠它跨版本保留 |
+| `sharedPaths` | 相对**版本目录**的路径，激活时换成指向 `shared/<路径>` 的链接（`shared/` 的位置随布局变），运行时数据靠它跨版本保留 |
+| `preservePaths` | 相对 root 的路径，发版时整棵跳过：不覆盖、不删除、**不建链接**，服务器目录结构保持原样。只在 `mirror` 布局生效 |
 | `layout` | `mirror`（新机器默认：root 是发布源副本，不留历史）、`nested`（旧默认：root 下带 `releases/`、`current`）或 `flat`（root 是链接，指向当前版本） |
 | `keepReleases` | 保留多少个版本目录，默认 5；当前在用的永远不删 |
 | `restoreBackupOnRollback` | 回滚时是否默认恢复数据，默认 `false` |
@@ -270,7 +282,9 @@ copy C:\airlock\config\deployer.json C:\airlock\config\deployer.json.bak
 
 - 落点目录的内容和目录结构**与发布源一致**，不会多出 `releases/`、`current`、`state.json`；
 - 发布 = 把包内容镜像过去（先逐个文件原子覆盖，再删掉源里没有的），
-  `sharedPaths`（数据目录）整棵跳过，不会被删；
+  `sharedPaths` 与 `preservePaths`（数据目录）整棵跳过，不会被覆盖也不会被删；
+- 数据保护二选一：`sharedPaths` 会把目录换成链接（数据移到 `.airlock/<应用id>/shared/`，
+  目录结构改变）；`preservePaths` 只跳过、不建链接，线上目录保持原样（v0.6.0 起）；
 - 回滚不归 Airlock 管：`rollback` 会明确拒绝并提示「先 `git checkout` 到旧提交，再发一版」；
 - 版本信息留在本地 git 里。发布时把提交号当版本号，事后能对上：
 
@@ -345,6 +359,31 @@ C:\Users\Administrator\Desktop\.airlock\qingmang\
 - 备份也指 shared 就行：`"backupPaths": ["shared"]`。
 
 `sharedPaths` 只认相对路径，绝对路径和 `..` 会被契约直接拒掉。
+
+### `preservePaths`：只保护，不改目录结构
+
+`sharedPaths` 会把线上目录换成链接——备份脚本、运维习惯、外部工具如果认死原路径就会出问题。
+`preservePaths` 给的是另一种保护：**发版整棵跳过，不建链接、不迁移目录**。
+
+```json
+{ "layout": "mirror", "preservePaths": ["data", "assets/img/uploads"] }
+```
+
+行为约定：
+
+- 只在 `mirror` 布局生效。`nested` / `flat` 每版是独立目录，本来就碰不到线上数据，
+  配了也不报错，只是不产生效果；
+- 受保护路径既不覆盖也不删除（`prune` 会跳过它和它的祖先目录）；
+- 与 `sharedPaths` 的区别只有两点：不建链接、不搬家。同一路径**不要**同时配在两个字段里；
+- 被保护的路径整棵跳过，所以**本地新增的文件也不会写进服务器这些目录**——这是预期行为；
+- 想改线上数据就改服务器上那份（或走应用自己的后台），发版不会碰它。
+
+选哪个：线上目录结构必须保持原样（有外部脚本、备份按原路径做）用 `preservePaths`；
+需要数据跟着版本目录走、靠链接统一入口用 `sharedPaths`。
+
+⚠️ **升级顺序**：先让服务器上的 deployer 升到 0.6.0，再在 `deployer.json` 里加
+`preservePaths`。`deployerConfigSchema` 是严格的（`.strict()`），旧版 deployer 遇到不认识的
+字段会拒绝整份配置，那台机器的发布就全断了。
 
 ## Windows 裸进程托管：四个真机才暴露的坑
 
@@ -750,6 +789,7 @@ airlock-deploy ui --app demo --token my-fixed-token
 - 协议行与二进制混读、跨 chunk 边界（`test/deploy-protocol.test.mjs`）
 - install / activate / rollback / 自动回退 / 版本冲突 / 数据备份恢复（`test/deploy-ops.test.mjs`）
 - 命令执行、超时、Windows 正斜杠路径、健康检查 URL/命令探针（`test/deploy-runtime.test.mjs`）
+- mirror 下 `preservePaths` 整棵跳过、不建链接、与 `sharedPaths` 共存（`test/deploy-preserve.test.mjs`）
 - **真机（Windows Server 2025 / Node 24.22 / OpenSSH）**：`provision-windows.ps1` 建账号、
   `ForceCommand` 门禁生效（受限账号只能跑 deployer）、发布 v1、发布 v2 平滑切换、
   发坏版本触发 `HEALTH_FAILED` 并自动切回、手动 `rollback` 回上一版、
