@@ -1,6 +1,6 @@
 ---
 name: airlock-deploy
-description: 用 Airlock 把本地构建产物发布到远程服务器并支持版本回滚。触发词：发布到服务器、发版、部署到服务器、上线、回滚、回退版本、查看服务器版本、服务器跑的是哪一版、airlock-deploy、airlock release、发布失败、健康检查不过、新服务器接入、部署账号、sshd ForceCommand、current 链接、改发布目录、多服务器、发布到测试机。
+description: 用 Airlock 把本地构建产物发布到远程服务器并支持版本回滚。触发词：发布到服务器、发版、部署到服务器、上线、回滚、回退版本、查看服务器版本、服务器跑的是哪一版、airlock-deploy、airlock release、发布失败、健康检查不过、新服务器接入、部署账号、sshd ForceCommand、current 链接、改发布目录、多服务器、发布到测试机、数据被覆盖、发布覆盖上传文件、保护数据目录、mirror 布局、sharedPaths、preservePaths、不改 airlock 代码、给 airlock 提建议、检查 airlock 更新、绕开部署通道。
 whenToUse: 要把本地代码或构建产物推到远程 Windows/Linux 服务器、查看或回滚服务器版本、给新服务器接发布能力、改服务器上的发布落点时。
 ---
 
@@ -19,6 +19,16 @@ whenToUse: 要把本地代码或构建产物推到远程 Windows/Linux 服务器
 - 同一份代码要发到不同机器（测试机 / 正式机）
 
 **不要用它做**：远程改文件（那是 `airlock` 的 remote-dev 通道）、跑任意命令、管数据库。
+
+## 通道纪律
+
+- **只用 airlock 的通道**：`airlock-deploy`（发布、回滚、状态）与 `airlock`（remote-dev）。
+  不用 scp / sftp / rsync / 远程桌面直接搬运或修改服务器文件——服务器目录由发版接管，
+  手改的内容下一次发版会被镜像覆盖，也不进版本历史。
+- 某件事 airlock 做不到（必须在服务器上执行一次性命令、修改发布范围外的文件），
+  **停下来说明原因、需要什么权限**，不要静默改用别的通道。
+- **不改 airlock 源码**，也不在项目里 fork 或打补丁。缺功能按「发现 bug 或缺功能」一节的格式交给上游，
+  个性化差异（保护哪些目录、版本号规则、服务怎么起）留在项目自己的配置和 skill 里。
 
 ## 快速命令
 
@@ -95,6 +105,20 @@ airlock-deploy mcp                            # 给 MCP 客户端的 stdio 服�
   项目内 `config/deploy-profiles.json` 里的项目会凭空消失且没有报错。
   发现「项目少了」先查这三个来源，别怀疑档案被删了。
 
+## 首次在项目里使用：落一份项目 skill
+
+airlock 只管分发。某个项目要保护哪些数据、版本号怎么排、服务怎么起，都是项目自己的事。
+所以第一次用它在某个项目发布时，**在该项目留一份项目级 skill**（`<项目>/.dsh/skills/airlock-deploy/SKILL.md`，
+或项目已有的 agent 说明文件），至少写清：
+
+- 本项目的 profile 名、服务器名、app 名、本地工作区
+- 版本号规则（例如 `YYYYMMDD-HHMM`）与「先 commit 再发版」的约定
+- 服务器落点、启动命令、健康检查 URL
+- 数据保护：哪些路径配 `sharedPaths`、哪些配 `preservePaths`
+- 发版后的验收命令（`status --probe`、一次真实请求、回滚演练）
+
+项目 skill 只写项目差异，通用流程引用本文件，不要把整份复制过去，否则 airlock 升级后两份会漂移。
+
 ## 改服务器上的落点
 
 落点就是 `deployer.json` 里该应用的 `root`，决定 `releases/`、`backups/`、`current` 放在哪。
@@ -128,6 +152,22 @@ airlock-deploy mcp                            # 给 MCP 客户端的 stdio 服�
 | `install` | 否 | 解压后、激活前跑（npm ci 等），cwd 是版本目录 |
 | `backupPaths` | 否 | 相对 root 的目录，发布前打包 |
 | `keepReleases` | 否 | 默认 5，当前版本永不删 |
+| `sharedPaths` | 否 | 跨版本共享的数据目录，激活时换成指向 `<root>/shared/<路径>` 的链接 |
+| `preservePaths` | 否 | 发布时整棵跳过、不建链接、不改目录结构（上游实现中，没有就先用 sharedPaths） |
+
+### 数据保护（mirror 布局重点）
+
+mirror 下服务器目录就是本地版本的副本：发版会覆盖同名文件，并**删掉源里没有的文件**。
+上传目录、数据库、留资这类运行时数据必须显式保护，否则一发版就清空。
+
+| 字段 | 语义 | 目录结构 |
+|---|---|---|
+| `sharedPaths` | 数据移到 `<root>/shared/<路径>`，junction/symlink 链回版本目录 | 会变 |
+| `preservePaths` | 发布时整棵跳过，不覆盖不删除，也不建链接 | 不变 |
+
+- 同一路径**不要**同时配在两个字段里，两个都配 `linkSharedPaths` 仍会建链接
+- 被保护的路径整棵跳过：本地新增的文件也不会写进服务器这些目录，这是预期行为
+- 保护哪些路径由项目决定并写进该项目的 skill，airlock 不内置具体路径
 
 ## 有状态服务（游戏服这类）
 
@@ -189,6 +229,31 @@ node -e "console.log(require('os').homedir())"    # 你的家目录
 - 档案用哪份：`--profiles` 参数、`AIRLOCK_DEPLOY_PROFILES_FILE` 环境变量、或默认的两份合并
 - 服务器上代码在哪：`status` 返回的 `root`；`deployer.json` 一般在 `<部署根>/config/`
 - 部署账号叫什么：档案里的 `user`
+
+## 检查 airlock 更新
+
+发版前顺手看一眼版本，别用着一个有大坑的旧版：
+
+```powershell
+node -e "console.log(require('airlock/package.json').version)"   # 本地版本
+npm view airlock version                                          # 上游最新版
+```
+
+- 服务器上通常有 `update-applied.txt`、CHANGELOG，升级前先读迁移说明
+- 「更新器版本」可以通过发布通道自更新，见 `docs/TRANSFER.md`
+- 升级后各发一版，确认 `status`、健康检查、回滚都正常再继续
+
+## 发现 bug 或缺功能
+
+**不改 airlock 源码**，写一段给上游的提示词交给维护者，至少包含：
+
+1. **现象**：版本号、复现步骤、期望行为、实际行为、报错原文
+2. **语义**：希望新增的配置项或 op 的准确含义，以及它和现有字段的边界
+3. **涉及文件**：契约、操作、部署器、CLI、UI 前后端、测试、文档
+4. **兼容性**：老配置是否还能解析，升级后行为有没有变化
+5. **验收**：能跑通的最小测试用例
+
+写完先在本项目用配置或封装脚本绕过去，并在项目 skill 里记一笔「等上游支持 X 后改回来」。
 
 ## 交付前自检
 
