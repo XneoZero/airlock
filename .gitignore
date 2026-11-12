@@ -11,3 +11,4 @@ Thumbs.db
 
 # 接入新机器时生成的一次性脚本（含具体公钥/IP），不进仓库
 /join-target-*.ps1
+*.tgz
