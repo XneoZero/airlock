@@ -1,6 +1,6 @@
 {
   "name": "airlock",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Narrow, auditable SSH channels for agents: remote file editing, and versioned deploys with automatic rollback.",
   "keywords": [
     "mcp",
@@ -40,7 +40,8 @@
     "cli": "node bin/airlock.mjs",
     "mcp": "node bin/airlock-mcp.mjs",
     "deploy": "node bin/airlock-deploy.mjs",
-    "ui": "node bin/airlock-deploy-ui.mjs"
+    "ui": "node bin/airlock-deploy-ui.mjs",
+    "updater": "node scripts/build-updater.mjs"
   },
   "dependencies": {
     "tar": "^7.5.22",

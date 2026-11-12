@@ -63,39 +63,42 @@ git push origin main
 
 场景：`ForceCommand` 只允许 deployer，agent 只剩发布通道，但要更新服务器上的 Airlock 代码。
 
-做法：用**发布通道自己**把代码送上去——deployer 启动的进程是 SYSTEM 身份，能写任何目录。
+前提：**部署器里要有一个「沙盒应用」**，它的 `start` 会执行版本目录里的 node 入口
+（`node server.mjs`，cwd 是版本目录）。这一点必须先确认——2026-11-12 实测过反面案例：
+某个应用看着像沙盒，`start` 其实是固定的 `start-<app>.ps1`，发上去的 `server.mjs` 从未被执行，
+健康检查一路超时，还会触发自动回退把代码覆盖回去。
 
-1. 在本地准备一个"更新器"版本目录：
+做法：用**发布通道自己**把代码送上去——deployer 起的进程是部署账号的身份，能写安装目录。
 
-   ```
-   updater\
-   ├── server.mjs          启动时覆盖代码，然后起 HTTP 服务让健康检查通过
-   └── payload\
-       ├── src\            要更新的新代码
-       └── bin\
-   ```
+1. 生成更新器（仓库内）：
 
-2. `server.mjs` 的核心逻辑（逐文件覆盖，别用整目录 `cpSync`，容易多套一层）：
-
-   ```js
-   function overlay(from, to) {
-     mkdirSync(to, { recursive: true });
-     for (const entry of readdirSync(from, { withFileTypes: true })) {
-       const src = join(from, entry.name), dst = join(to, entry.name);
-       if (entry.isDirectory()) overlay(src, dst); else copyFileSync(src, dst);
-     }
-   }
-   overlay(join(here, 'payload', 'src'), 'C:/airlock/src');
-   overlay(join(here, 'payload', 'bin'), 'C:/airlock/bin');
+   ```powershell
+   node scripts/build-updater.mjs --out .\updater
+   # 顺便改服务器配置时：--preserve <应用id>:<路径1>,<路径2>
+   # 目标目录与端口：--target C:/airlock --port 3080
+   # 生成后直接发：--publish <沙盒应用>@<服务器名>
    ```
 
-3. `airlock-deploy release --app <app> --source .\updater --version v-update-1`
+   产物是 `server.mjs`（覆盖 payload 后起 HTTP 服务）+ `payload/`（`bin/`、`src/`、两个清单），
+   并按常见入口名各拷一份（`index.mjs` / `index.js` / `server.js` / `app.js` / `main.js`），
+   带 `type: module` 的 `package.json`——不知道沙盒应用的 start 指向哪个文件名时不用改脚本。
+   `config/`、`node_modules/` 与服务器本地脚本不在 payload 里，不会被覆盖。
 
-4. 验证新代码生效：**看日志里有没有只有新版本才会写的那一行**。
-   这次是 `端口检查：端口 18080 已释放` 出现在 `deploy.log` 里，说明覆盖成功。
+2. 发出去：
+
+   ```powershell
+   node bin/airlock-deploy.mjs release --app <沙盒应用> --server <服务器> --source .\updater --version v0.6.1-<时间戳>
+   ```
+
+   更新器的执行顺序是：先覆盖代码 → 再改配置（若带 `--preserve`）→ 再起服务让健康检查通过。
+   代码没覆盖成功时**不会**改配置：旧 deployer 不认识新字段，会把整份配置拒掉。
+
+3. 验证新代码生效：`status` 返回里出现 `layout` / `sharedPaths` / `preservePaths`
+   （v0.6.0 起才有）。健康检查失败时另看更新器写的落地标记：`%TEMP%\airlock-updater.log`、
+   用户目录与安装目录各一份——有标记说明 start 执行了，没标记说明 start 没跑 node 入口。
 
 > 这条路也说明了安全模型的事实：**发布通道 = 能在服务器上执行任意代码**。
-> `ForceCommand` 挡的是交互 shell，挡不住"发一个版本上来跑"。DEPLOY.md 的
+> `ForceCommand` 挡的是交互 shell，挡不住「发一个版本上来跑」。DEPLOY.md 的
 > 「受限账号的权限现实」那节讲的就是这件事。
 
 ### 4.3 让服务器自己下载（最省事，前提是镜像通）

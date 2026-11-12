@@ -261,6 +261,22 @@ npm view airlock version                                          # 上游最新
 - 「更新器版本」可以通过发布通道自更新，见 `docs/TRANSFER.md`
 - 升级后各发一版，确认 `status`、健康检查、回滚都正常再继续
 
+### 更新服务器上的 airlock 本体
+
+服务器上的 deployer 是独立副本，本地改了代码不会自己上去，要走一次发布通道自更新：
+
+```powershell
+node scripts/build-updater.mjs --out .\updater --publish <沙盒应用>@<服务器名>
+```
+
+- 前提：那个应用的 `start` 必须执行版本目录里的 node 入口（`node server.mjs`）。`start` 若是
+  固定的 `start-<应用>.ps1`，更新器根本不会被执行——先确认，别反复重试
+- 验证：`status` 返回里出现 `layout` / `sharedPaths` / `preservePaths`（v0.6.0 起）；
+  失败时看安装目录与 `%TEMP%` 下的 `airlock-updater.log`——有标记说明跑过，没标记说明没被执行
+- 同时改配置（例如给项目加 `preservePaths`）加 `--preserve <应用id>:<路径1>,<路径2>`；
+  它只在代码覆盖成功后动配置，且会先备份 `deployer.json`
+- 命令细节与实测记录见 `docs/TRANSFER.md` 4.2
+
 ## 发现 bug 或缺功能
 
 **不改 airlock 源码**，写一段给上游的提示词交给维护者，至少包含：
