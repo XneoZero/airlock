@@ -7,7 +7,7 @@ import { arch, hostname, release, version as osVersion } from 'node:os';
 import { join } from 'node:path';
 import { appIds, appOf, type DeployContext } from './context.ts';
 import { hasBackup } from './backup.ts';
-import { currentVersionOnDisk, readState, releaseDir, releasesDir, tailLog } from './state.ts';
+import { currentVersionOnDisk, readState, releaseDir, releasesDir, stateRoot, tailLog } from './state.ts';
 import { statusApp, waitHealthy } from './runtime.ts';
 
 async function releaseDirsOnDisk(root: string): Promise<string[]> {
@@ -22,16 +22,16 @@ async function releaseDirsOnDisk(root: string): Promise<string[]> {
 export async function statusOfApp(ctx: DeployContext, appId: unknown, probe: boolean): Promise<unknown> {
   const app = appOf(ctx, appId);
   const [state, onDisk, dirs] = await Promise.all([
-    readState(app.root), currentVersionOnDisk(app.root), releaseDirsOnDisk(app.root),
+    readState(stateRoot(app.root, app.layout ?? 'nested')), currentVersionOnDisk(app.root, app.layout ?? 'nested'), releaseDirsOnDisk(stateRoot(app.root, app.layout ?? 'nested')),
   ]);
   const currentRecord = onDisk === null ? null : state.history.find(item => item.version === onDisk) ?? null;
 
   let health: { ok: boolean; detail: string } | null = null;
   if (probe && onDisk !== null) {
-    const outcome = await waitHealthy(app.root, app.health === undefined ? undefined : { ...app.health, timeoutMs: Math.min(app.health.timeoutMs ?? 5000, 5000), intervalMs: 200 });
+    const outcome = await waitHealthy(app.root, app.health === undefined ? undefined : { ...app.health, timeoutMs: Math.min(app.health.timeoutMs ?? 5000, 5000), intervalMs: 200 }, app.layout ?? 'nested');
     health = { ok: outcome.ok, detail: outcome.detail };
   }
-  const status = await statusApp(app.root, app.runtime.status);
+  const status = await statusApp(app.root, app.runtime.status, app.layout ?? 'nested');
 
   return {
     app: appId,
@@ -46,7 +46,7 @@ export async function statusOfApp(ctx: DeployContext, appId: unknown, probe: boo
     history: state.history.slice(-10),
     health,
     status: status.detail,
-    backup: onDisk === null ? null : await hasBackup(app.root, onDisk),
+    backup: onDisk === null ? null : await hasBackup(stateRoot(app.root, app.layout ?? 'nested'), onDisk),
   };
 }
 
@@ -60,7 +60,7 @@ export async function statusAll(ctx: DeployContext): Promise<unknown> {
 export async function listOfApp(ctx: DeployContext, appId: unknown): Promise<unknown> {
   const app = appOf(ctx, appId);
   const [state, onDisk, dirs] = await Promise.all([
-    readState(app.root), currentVersionOnDisk(app.root), releaseDirsOnDisk(app.root),
+    readState(stateRoot(app.root, app.layout ?? 'nested')), currentVersionOnDisk(app.root, app.layout ?? 'nested'), releaseDirsOnDisk(stateRoot(app.root, app.layout ?? 'nested')),
   ]);
   const releases = dirs.map(version => {
     const record = state.history.find(item => item.version === version) ?? null;
@@ -73,7 +73,7 @@ export async function listOfApp(ctx: DeployContext, appId: unknown): Promise<unk
       fileCount: record?.fileCount ?? null,
       bytes: record?.bytes ?? null,
       commit: record?.commit ?? null,
-      dir: releaseDir(app.root, version),
+      dir: releaseDir(stateRoot(app.root, app.layout ?? 'nested'), version),
     };
   });
   return { app: appId, current: onDisk, releases, history: state.history };
@@ -82,10 +82,10 @@ export async function listOfApp(ctx: DeployContext, appId: unknown): Promise<unk
 export async function logsOfApp(ctx: DeployContext, appId: unknown, lines: unknown): Promise<unknown> {
   const app = appOf(ctx, appId);
   const count = typeof lines === 'number' && Number.isFinite(lines) ? Math.min(Math.max(1, Math.floor(lines)), 500) : 50;
-  const tail = await tailLog(app.root, count);
-  const current = await currentVersionOnDisk(app.root);
-  const status = await statusApp(app.root, app.runtime.status);
-  return { app: appId, current, lines: tail, status: status.detail, releases: await releaseDirsOnDisk(app.root) };
+  const tail = await tailLog(stateRoot(app.root, app.layout ?? 'nested'), count);
+  const current = await currentVersionOnDisk(app.root, app.layout ?? 'nested');
+  const status = await statusApp(app.root, app.runtime.status, app.layout ?? 'nested');
+  return { app: appId, current, lines: tail, status: status.detail, releases: await releaseDirsOnDisk(stateRoot(app.root, app.layout ?? 'nested')) };
 }
 
 /** 删掉超出保留数的旧版本目录（只删目录，不删历史记录与备份）。 */
@@ -94,8 +94,8 @@ export async function pruneReleases(ctx: DeployContext, appId: unknown, keepOver
   const keep = typeof keepOverride === 'number' && Number.isFinite(keepOverride)
     ? Math.min(Math.max(1, Math.floor(keepOverride)), 50)
     : app.keepReleases ?? 5;
-  const current = await currentVersionOnDisk(app.root);
-  const dirs = await releaseDirsOnDisk(app.root);
+  const current = await currentVersionOnDisk(app.root, app.layout ?? 'nested');
+  const dirs = await releaseDirsOnDisk(stateRoot(app.root, app.layout ?? 'nested'));
   // 保留最新的 N 个，但当前在用的那个永远不删，哪怕它已经很旧。
   const ordered = [...dirs].sort();
   const keepers = new Set(ordered.slice(-keep));
@@ -104,7 +104,7 @@ export async function pruneReleases(ctx: DeployContext, appId: unknown, keepOver
   const { rm } = await import('node:fs/promises');
   for (const version of ordered) {
     if (keepers.has(version)) continue;
-    await rm(join(releasesDir(app.root), version), { recursive: true, force: true });
+    await rm(join(releasesDir(stateRoot(app.root, app.layout ?? 'nested')), version), { recursive: true, force: true });
     removed.push(version);
   }
   return { app: appId, keep, removed, kept: [...keepers].sort() };

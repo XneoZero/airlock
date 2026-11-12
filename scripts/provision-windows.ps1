@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Provision a Windows server for Airlock deploys (dedicated account + sshd gate).
@@ -221,6 +221,9 @@ if ($DryRun) {
         apps = [ordered]@{
             $AppId = [ordered]@{
                 root = $AppRoot
+                # flat：root 本身就是站点入口，桌面打开应用夹看到的就是网站文件；
+                # 版本与状态在 <root 父目录>\.airlock\<app> 下。
+                layout = 'flat'
                 keepReleases = 5
                 runtime = [ordered]@{
                     start = [ordered]@{

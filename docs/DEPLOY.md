@@ -257,10 +257,34 @@ copy C:\airlock\config\deployer.json C:\airlock\config\deployer.json.bak
 | `install` | 解压后、激活前跑一次（装依赖、编译），在版本目录里执行 |
 | `backupPaths` | 相对 root 的目录，激活前打包；空表示只回代码 |
 | `sharedPaths` | 相对**版本目录**的路径，激活时换成指向 `<root>/shared/<路径>` 的链接，运行时数据靠它跨版本保留 |
+| `layout` | `nested`（默认，root 下带 `releases/`、`current`）或 `flat`（root 本身就是站点入口） |
 | `keepReleases` | 保留多少个版本目录，默认 5；当前在用的永远不删 |
 | `restoreBackupOnRollback` | 回滚时是否默认恢复数据，默认 `false` |
 
 命令对象里的 `cwd` 只能是 `current` 或 `root`，不接受任意路径——否则路径注入面又打开了。
+
+### `flat` 布局：桌面上的应用夹打开就是网站
+
+默认的 `nested` 布局会把 `releases/`、`current`、`state.json`、`deploy.log` 和站点文件放在同一个
+目录里。对「产物就在管理员桌面」这种用法，打开文件夹会看到一堆看不懂的目录，站点入口还藏在
+`current\` 里。
+
+`"layout": "flat"` 把它反过来：**root 本身就是指向当前版本的链接**，版本与状态挪到
+`<root 父目录>/.airlock/<应用id>/`：
+
+```
+C:\Users\Administrator\Desktop\qingmang\   ← 站点入口（链接）
+    index.html  assets\  server.js  ...
+C:\Users\Administrator\Desktop\.airlock\qingmang\
+    releases\<版本>\  backups\  state.json  deploy.log
+```
+
+- 回滚能力不变——换的只是链接目标；
+- 首次从 `nested` 切过来时，root 里原有的内容会整体挪进 `releases/legacy-<时间戳>/` 保留，不删；
+- `sharedPaths` 的 `shared/` 也跟着挪到 `.airlock/<应用id>/shared/`；
+- `runtime` 里 `cwd: "current"` 在 flat 下等价于 root，启停脚本不用改。
+
+`provision-windows.ps1` 给新机器生成的配置默认就是 `flat`。
 
 ### 有状态应用：`sharedPaths` 让数据跨版本活下来
 

@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import { connect } from 'node:net';
 import { join } from 'node:path';
 import type { DeployCommand, HealthCheck } from './contracts.ts';
+import type { AppLayout } from './state.ts';
 
 export interface RunResult {
   readonly code: number;
@@ -27,7 +28,9 @@ function cap(text: string): string {
 }
 
 /** cwd 只有两种合法值：版本目录或应用根。 */
-export function resolveCwd(root: string, cwd: DeployCommand['cwd']): string {
+export function resolveCwd(root: string, cwd: DeployCommand['cwd'], layout: AppLayout = 'nested'): string {
+  // flat 布局下 root 本身就是当前版本的入口，没有 current 这一层。
+  if (layout === 'flat') return root;
   return cwd === 'root' ? root : join(root, 'current');
 }
 
@@ -36,11 +39,12 @@ export interface RunOptions {
   readonly command: DeployCommand;
   /** 覆盖 cwd（install 命令要在刚解压的版本目录里跑，而不是 current）。 */
   readonly cwdOverride?: string;
+  readonly layout?: AppLayout;
 }
 
 export function runCommand(options: RunOptions): Promise<RunResult> {
   const { command } = options;
-  const cwd = options.cwdOverride ?? resolveCwd(options.root, command.cwd);
+  const cwd = options.cwdOverride ?? resolveCwd(options.root, command.cwd, options.layout);
   const timeoutMs = command.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   // Windows + Node 的坑：可执行文件路径用正斜杠时，cmd.exe 这类宿主会报「命令语法不正确」。
   // 只规范化 command 本身（路径），不动 args —— 参数里可能有 URL 之类必须保留正斜杠的值。
@@ -85,23 +89,23 @@ export interface StepOutcome {
   readonly detail: string;
 }
 
-export async function startApp(root: string, start: DeployCommand): Promise<StepOutcome> {
-  const result = await runCommand({ root, command: start });
+export async function startApp(root: string, start: DeployCommand, layout: AppLayout = 'nested'): Promise<StepOutcome> {
+  const result = await runCommand({ root, command: start, layout });
   if (result.code === 0) return { ok: true, detail: 'start 命令退出 0' };
   return { ok: false, detail: `start 失败（退出码 ${result.code}${result.timedOut ? '，超时' : ''}）：${firstLine(result.stderr || result.stdout)}` };
 }
 
 /** 停止是「尽力而为」：配置了才调，退出码非 0 只记原因，不阻断后续切换。 */
-export async function stopApp(root: string, stop: DeployCommand | undefined): Promise<StepOutcome> {
+export async function stopApp(root: string, stop: DeployCommand | undefined, layout: AppLayout = 'nested'): Promise<StepOutcome> {
   if (stop === undefined) return { ok: true, detail: '未配置 stop，跳过' };
-  const result = await runCommand({ root, command: stop });
+  const result = await runCommand({ root, command: stop, layout });
   if (result.code === 0) return { ok: true, detail: 'stop 命令退出 0' };
   return { ok: true, detail: `stop 退出码 ${result.code}（进程可能本就没在跑）` };
 }
 
-export async function statusApp(root: string, status: DeployCommand | undefined): Promise<StepOutcome> {
+export async function statusApp(root: string, status: DeployCommand | undefined, layout: AppLayout = 'nested'): Promise<StepOutcome> {
   if (status === undefined) return { ok: false, detail: '未配置 status 命令' };
-  const result = await runCommand({ root, command: status });
+  const result = await runCommand({ root, command: status, layout });
   return { ok: result.code === 0, detail: firstLine(result.stdout || result.stderr || `退出码 ${result.code}`) };
 }
 
@@ -130,7 +134,7 @@ async function probeUrl(url: string, expectStatus: number, timeoutMs: number): P
  * 轮询直到通过或超时。两种探针都给时优先 url（更接近用户真实访问路径），
  * 命令探针留作「没有监听端口」的服务（例如纯 worker）。
  */
-export async function waitHealthy(root: string, health: HealthCheck | undefined): Promise<HealthOutcome> {
+export async function waitHealthy(root: string, health: HealthCheck | undefined, layout: AppLayout = 'nested'): Promise<HealthOutcome> {
   if (health === undefined) return { ok: true, detail: '未配置健康检查，跳过', attempts: 0 };
   const timeoutMs = health.timeoutMs ?? 60_000;
   const intervalMs = health.intervalMs ?? 500;
@@ -142,7 +146,7 @@ export async function waitHealthy(root: string, health: HealthCheck | undefined)
     if (health.url !== undefined) {
       last = await probeUrl(health.url, health.expectStatus ?? 200, timeoutMs);
     } else if (health.command !== undefined) {
-      const result = await runCommand({ root, command: health.command });
+      const result = await runCommand({ root, command: health.command, layout });
       last = result.code === 0
         ? { ok: true, detail: '健康检查命令退出 0' }
         : { ok: false, detail: `健康检查命令退出码 ${result.code}：${firstLine(result.stderr || result.stdout)}` };

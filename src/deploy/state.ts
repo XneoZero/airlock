@@ -8,7 +8,7 @@
  * 3. 历史只追加，删除旧版本不删记录，方便事后回答「上一版到底是谁发布失败」。
  */
 import { mkdir, readFile, readlink, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { appStateSchema, STATE_VERSION, type AppState, type ReleaseRecord } from './contracts.ts';
 
 export const FILE_STATE = 'state.json';
@@ -18,18 +18,40 @@ export const DIR_BACKUPS = 'backups';
 export const DIR_INCOMING = 'incoming';
 export const LINK_CURRENT = 'current';
 
+/**
+ * 两种落点布局：
+ *
+ * - `nested`（默认，兼容老配置）：root 下同时放站点文件和 `releases/`、`current`、`state.json`。
+ * - `flat`：**root 本身就是站点目录**（指向当前版本的链接），版本与状态挪到
+ *   `<root 父目录>/.airlock/<app 名>/`。桌面上的应用夹打开就是 index.html，
+ *   不会混进一堆看不懂的目录。
+ */
+export type AppLayout = 'nested' | 'flat';
+
+/** 状态根：releases/、backups/、state.json、deploy.log 都放这里。 */
+export function stateRoot(root: string, layout: AppLayout = 'nested'): string {
+  return layout === 'flat' ? join(dirname(root), '.airlock', basename(root)) : root;
+}
+
 export function releasesDir(root: string): string { return join(root, DIR_RELEASES); }
 export function releaseDir(root: string, version: string): string { return join(root, DIR_RELEASES, version); }
 export function backupsDir(root: string): string { return join(root, DIR_BACKUPS); }
 export function backupFile(root: string, version: string): string { return join(root, DIR_BACKUPS, `${version}.tar.gz`); }
 export function incomingDir(root: string): string { return join(root, DIR_INCOMING); }
 export function statePath(root: string): string { return join(root, FILE_STATE); }
-export function currentLink(root: string): string { return join(root, LINK_CURRENT); }
+export function logPath(root: string): string { return join(root, FILE_LOG); }
+/** 站点入口链接：nested 是 `<root>/current`，flat 就是 root 本身。 */
+export function currentLink(root: string, layout: AppLayout = 'nested'): string {
+  return layout === 'flat' ? root : join(root, LINK_CURRENT);
+}
 
-export async function ensureAppDirs(root: string): Promise<void> {
-  for (const dir of [root, releasesDir(root), backupsDir(root), incomingDir(root)]) {
+export async function ensureAppDirs(root: string, layout: AppLayout = 'nested'): Promise<void> {
+  const state = stateRoot(root, layout);
+  for (const dir of [releasesDir(state), backupsDir(state), incomingDir(state)]) {
     await mkdir(dir, { recursive: true });
   }
+  // flat 时 root 是链接，由 switchCurrent 负责创建，这里不能 mkdir
+  if (layout === 'nested') await mkdir(root, { recursive: true });
 }
 
 const EMPTY_STATE: AppState = { current: null, history: [] };
@@ -57,9 +79,9 @@ export async function writeState(root: string, state: AppState): Promise<void> {
 }
 
 /** 读 current 链接指向的版本目录名；链接不存在返回 null。 */
-export async function currentVersionOnDisk(root: string): Promise<string | null> {
+export async function currentVersionOnDisk(root: string, layout: AppLayout = 'nested'): Promise<string | null> {
   try {
-    const target = await readlink(currentLink(root));
+    const target = await readlink(currentLink(root, layout));
     const parts = target.split(/[\\/]+/).filter(Boolean);
     return parts.length > 0 ? parts[parts.length - 1] : null;
   } catch {

@@ -18,9 +18,15 @@ import { DeployError, messageOf } from './errors.ts';
 import { runCommand, startApp, stopApp, waitHealthy, waitPortReleased } from './runtime.ts';
 import {
   appendLog, currentLink, currentVersionOnDisk, ensureAppDirs, findRecord, incomingDir,
-  previousDeployed, readState, releaseDir, releasesDir, setCurrent, upsertRecord, writeState,
+  previousDeployed, readState, releaseDir, releasesDir, setCurrent, stateRoot, upsertRecord, writeState,
+  type AppLayout,
 } from './state.ts';
 import type { DeployContext, ArchiveReceiver } from './context.ts';
+
+/** 落点布局；老配置没写 layout 就按 nested（root 下带 releases/current）。 */
+function layoutOf(app: AppConfig): AppLayout {
+  return app.layout ?? 'nested';
+}
 
 async function exists(path: string): Promise<boolean> {
   try { await access(path); return true; } catch { return false; }
@@ -33,18 +39,30 @@ export function requireVersion(value: unknown): string {
   return value;
 }
 
-/** 切链接：先删旧链接（可能是符号链接或 junction），再指向新版本目录。 */
-async function switchCurrent(root: string, version: string): Promise<void> {
-  const link = currentLink(root);
+/** 切站点入口：nested 切 `<root>/current`，flat 直接切 root 本身。 */
+async function switchCurrent(root: string, version: string, layout: AppLayout = 'nested'): Promise<void> {
+  const state = stateRoot(root, layout);
+  const link = currentLink(root, layout);
   const info = await lstat(link).catch(() => null);
   if (info !== null) {
-    if (info.isSymbolicLink()) await unlink(link).catch(() => rmdir(link).catch(() => undefined));
-    else if (info.isDirectory()) await rmdir(link);
-    else await unlink(link);
+    if (info.isSymbolicLink()) {
+      await unlink(link).catch(() => rmdir(link).catch(() => undefined));
+    } else if (layout === 'flat' && info.isDirectory()) {
+      // 首次从 nested 切到 flat：root 还是老布局的实体目录（站点文件直接躺在里面）。
+      // 整体挪进状态区保留，再从链接过去，不丢任何东西。
+      const legacy = resolve(state, 'releases', `legacy-${Date.now()}`);
+      await mkdir(resolve(legacy, '..'), { recursive: true });
+      await rename(root, legacy);
+    } else if (info.isDirectory()) {
+      await rmdir(link);
+    } else {
+      await unlink(link);
+    }
   }
-  const target = resolve(releasesDir(root), version);
+  const target = resolve(releasesDir(state), version);
+  await mkdir(resolve(link, '..'), { recursive: true });
   await symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir');
-  await appendLog(root, `current -> releases/${version}`);
+  await appendLog(state, `current -> releases/${version}`);
 }
 
 /**
@@ -95,10 +113,11 @@ async function linkSharedPaths(root: string, versionDir: string, sharedPaths: re
   await appendLog(root, `shared 链接已就位：${sharedPaths.join('、')}`);
 }
 
-/** 激活/回滚共用：先切 current，再把 sharedPaths 挂进版本目录。 */
-async function prepareVersion(root: string, version: string, sharedPaths: readonly string[] | undefined): Promise<void> {
-  await switchCurrent(root, version);
-  await linkSharedPaths(root, resolve(releasesDir(root), version), sharedPaths);
+/** 激活/回滚共用：先切站点入口，再把 sharedPaths 挂进版本目录。 */
+async function prepareVersion(root: string, version: string, sharedPaths: readonly string[] | undefined, layout: AppLayout = 'nested'): Promise<void> {
+  const state = stateRoot(root, layout);
+  await switchCurrent(root, version, layout);
+  await linkSharedPaths(state, resolve(releasesDir(state), version), sharedPaths);
 }
 
 /** 把请求头里声明的字节数写进临时文件，返回落盘大小。超限中途即失败，不等到写完。 */
@@ -121,18 +140,18 @@ export async function receiveArchive(receiver: ArchiveReceiver, size: number, ta
 }
 
 export async function installVersion(ctx: DeployContext, app: AppConfig, params: Record<string, unknown>, receiver: ArchiveReceiver): Promise<unknown> {
-  await ensureAppDirs(app.root);
+  await ensureAppDirs(app.root, layoutOf(app));
   const version = requireVersion(params.version);
   const archiveSize = typeof params.archiveSize === 'number' ? params.archiveSize : -1;
   const maxBytes = ctx.config.maxArchiveBytes ?? 536_870_912;
   if (archiveSize < 0) throw new DeployError('INVALID_REQUEST', 'install 需要 archiveSize');
   if (archiveSize > maxBytes) throw new DeployError('ARCHIVE_TOO_LARGE', `归档超过上限 ${maxBytes} 字节`, { archiveSize, maxBytes });
 
-  const finalDir = releaseDir(app.root, version);
+  const finalDir = releaseDir(stateRoot(app.root, layoutOf(app)), version);
   if (await exists(finalDir)) throw new DeployError('VERSION_EXISTS', `版本目录已存在：${version}`);
 
-  await Promise.all([ensureAppDirs(app.root), mkdir(incomingDir(app.root), { recursive: true })]);
-  const incoming = join(incomingDir(app.root), `${version}-${Date.now()}.tar.gz`);
+  await Promise.all([ensureAppDirs(app.root, layoutOf(app)), mkdir(incomingDir(stateRoot(app.root, layoutOf(app))), { recursive: true })]);
+  const incoming = join(incomingDir(stateRoot(app.root, layoutOf(app))), `${version}-${Date.now()}.tar.gz`);
   try {
     const written = await receiveArchive(receiver, archiveSize, incoming);
     if (written !== archiveSize) throw new DeployError('ARCHIVE_INVALID', '归档字节数与声明不一致', { written, archiveSize });
@@ -165,14 +184,14 @@ export async function installVersion(ctx: DeployContext, app: AppConfig, params:
     }
 
     await rename(staging, finalDir);
-    const state = await readState(app.root);
+    const state = await readState(stateRoot(app.root, layoutOf(app)));
     const record: ReleaseRecord = {
       version, manifestHash: manifest.totalHash, fileCount: manifest.files.length, bytes: manifest.bytes,
       commit: typeof params.commit === 'string' ? params.commit.slice(0, 64) : null,
       status: 'installed', createdAt: ctx.clock(), activatedAt: null, backup: null, note: '',
     };
-    await writeState(app.root, upsertRecord(state, record));
-    await appendLog(app.root, `install ${version}（${manifest.files.length} 文件 / ${manifest.bytes} 字节）`);
+    await writeState(stateRoot(app.root, layoutOf(app)), upsertRecord(state, record));
+    await appendLog(stateRoot(app.root, layoutOf(app)), `install ${version}（${manifest.files.length} 文件 / ${manifest.bytes} 字节）`);
     return { version, manifestHash: manifest.totalHash, fileCount: manifest.files.length, bytes: manifest.bytes };
   } finally {
     await rm(incoming, { force: true }).catch(() => undefined);
@@ -180,13 +199,13 @@ export async function installVersion(ctx: DeployContext, app: AppConfig, params:
 }
 
 export async function activateVersion(ctx: DeployContext, app: AppConfig, params: Record<string, unknown>): Promise<unknown> {
-  await ensureAppDirs(app.root);
-  let state = await readState(app.root);
+  await ensureAppDirs(app.root, layoutOf(app));
+  let state = await readState(stateRoot(app.root, layoutOf(app)));
   const version = requireVersion(params.version ?? state.current);
-  const dir = releaseDir(app.root, version);
+  const dir = releaseDir(stateRoot(app.root, layoutOf(app)), version);
   if (!(await exists(dir))) throw new DeployError('VERSION_NOT_FOUND', `版本目录不存在：${version}`);
 
-  const onDisk = await currentVersionOnDisk(app.root);
+  const onDisk = await currentVersionOnDisk(app.root, layoutOf(app));
   const existing = findRecord(state, version);
   if (onDisk === version && existing?.status === 'deployed') {
     return { version, replayed: true, previous: null, health: { ok: true, detail: '已是当前版本，未重复激活' } };
@@ -196,16 +215,16 @@ export async function activateVersion(ctx: DeployContext, app: AppConfig, params
   const previous = onDisk;
 
   // 备份在 stop 之前：先把「现在正在用的数据」固定下来，再停服务。
-  const backup = await createBackup(app.root, version, app.backupPaths ?? []);
+  const backup = await createBackup(stateRoot(app.root, layoutOf(app)), version, app.backupPaths ?? []);
 
-  const stop = await stopApp(app.root, app.runtime.stop);
-  await appendLog(app.root, `stop：${stop.detail}`);
+  const stop = await stopApp(app.root, app.runtime.stop, layoutOf(app));
+  await appendLog(stateRoot(app.root, layoutOf(app)), `stop：${stop.detail}`);
 
   // 停完先确认端口真的空了，再动 current。没空就说明旧进程还在跑：
   // 这时切过去，新进程会抢端口失败，而健康检查探到的还是旧进程——发布假成功。
   const released = await waitPortReleased(app.health);
   if (released !== null) {
-    await appendLog(app.root, `端口检查：${released.detail}`);
+    await appendLog(stateRoot(app.root, layoutOf(app)), `端口检查：${released.detail}`);
     if (!released.ok) {
       await markFailed(ctx, app.root, version, `停止旧版本失败：${released.detail}`);
       throw new DeployError('STOP_FAILED', `${released.detail}；current 仍是 ${previous ?? '(无)'}，未切换`, {
@@ -215,15 +234,15 @@ export async function activateVersion(ctx: DeployContext, app: AppConfig, params
     }
   }
 
-  await prepareVersion(app.root, version, app.sharedPaths);
+  await prepareVersion(app.root, version, app.sharedPaths, layoutOf(app));
 
   state = setCurrent(state, version);
   state = upsertRecord(state, { ...existing, status: 'installed', backup: backup.path, note: '' });
-  await writeState(app.root, state);
+  await writeState(stateRoot(app.root, layoutOf(app)), state);
 
   const startOnActivate = app.startOnActivate !== false;
   if (startOnActivate) {
-    const started = await startApp(app.root, app.runtime.start);
+    const started = await startApp(app.root, app.runtime.start, layoutOf(app));
     if (!started.ok) {
       const recovered = await recoverPrevious(ctx, app, previous);
       await markFailed(ctx, app.root, version, `启动失败：${started.detail}`);
@@ -231,7 +250,7 @@ export async function activateVersion(ctx: DeployContext, app: AppConfig, params
     }
   }
 
-  const health = await waitHealthy(app.root, app.health);
+  const health = await waitHealthy(app.root, app.health, layoutOf(app));
   if (!health.ok) {
     const recovered = await recoverPrevious(ctx, app, previous);
     await markFailed(ctx, app.root, version, `健康检查失败：${health.detail}`);
@@ -239,7 +258,7 @@ export async function activateVersion(ctx: DeployContext, app: AppConfig, params
   }
 
   await markDeployed(ctx, app.root, version);
-  await appendLog(app.root, `activate ${version}：健康检查通过（${health.detail}）`);
+  await appendLog(stateRoot(app.root, layoutOf(app)), `activate ${version}：健康检查通过（${health.detail}）`);
   return {
     version, replayed: false, previous,
     health: { ok: true, detail: health.detail, attempts: health.attempts },
@@ -251,13 +270,13 @@ export async function activateVersion(ctx: DeployContext, app: AppConfig, params
 async function recoverPrevious(ctx: DeployContext, app: AppConfig, previous: string | null): Promise<string> {
   if (previous === null) return '；没有上一版可回退，服务可能仍处于停止状态';
   try {
-    await prepareVersion(app.root, previous, app.sharedPaths);
+    await prepareVersion(app.root, previous, app.sharedPaths, layoutOf(app));
     // 状态文件必须跟着回退，否则 status 会一直报「记录说新版本、磁盘是旧版本」。
     // 这个不一致本身就是信号：真出现了要去查是谁改了链接。
-    const state = await readState(app.root);
-    await writeState(app.root, setCurrent(state, previous));
-    if (app.startOnActivate !== false) await startApp(app.root, app.runtime.start);
-    await appendLog(app.root, `自动回退准备：current -> releases/${previous}`);
+    const state = await readState(stateRoot(app.root, layoutOf(app)));
+    await writeState(stateRoot(app.root, layoutOf(app)), setCurrent(state, previous));
+    if (app.startOnActivate !== false) await startApp(app.root, app.runtime.start, layoutOf(app));
+    await appendLog(stateRoot(app.root, layoutOf(app)), `自动回退准备：current -> releases/${previous}`);
     return `；已自动切回 ${previous} 并重启`;
   } catch (error) {
     return `；自动回退 ${previous} 也失败了：${messageOf(error)}`;
@@ -279,43 +298,43 @@ async function markFailed(ctx: DeployContext, root: string, version: string, not
 }
 
 export async function rollbackVersion(ctx: DeployContext, app: AppConfig, params: Record<string, unknown>): Promise<unknown> {
-  await ensureAppDirs(app.root);
-  const state = await readState(app.root);
-  const onDisk = await currentVersionOnDisk(app.root);
+  await ensureAppDirs(app.root, layoutOf(app));
+  const state = await readState(stateRoot(app.root, layoutOf(app)));
+  const onDisk = await currentVersionOnDisk(app.root, layoutOf(app));
   const requested = typeof params.to === 'string' ? requireVersion(params.to) : null;
   const target = requested ?? previousDeployed(state, onDisk)?.version ?? null;
   if (target === null) throw new DeployError('NO_PREVIOUS_VERSION', '没有可回滚的上一版（历史里没有已部署记录）');
   if (target === onDisk) throw new DeployError('INVALID_REQUEST', `当前已经是 ${target}`);
 
-  const dir = releaseDir(app.root, target);
+  const dir = releaseDir(stateRoot(app.root, layoutOf(app)), target);
   if (!(await exists(dir))) throw new DeployError('VERSION_NOT_FOUND', `目标版本目录不存在：${target}`);
 
-  const stop = await stopApp(app.root, app.runtime.stop);
-  await appendLog(app.root, `rollback 开始：${onDisk ?? '(无)'} -> ${target}；stop：${stop.detail}`);
+  const stop = await stopApp(app.root, app.runtime.stop, layoutOf(app));
+  await appendLog(stateRoot(app.root, layoutOf(app)), `rollback 开始：${onDisk ?? '(无)'} -> ${target}；stop：${stop.detail}`);
 
   const released = await waitPortReleased(app.health);
   if (released !== null && !released.ok) {
-    await appendLog(app.root, `端口检查失败：${released.detail}`);
+    await appendLog(stateRoot(app.root, layoutOf(app)), `端口检查失败：${released.detail}`);
     throw new DeployError('STOP_FAILED', `${released.detail}；current 仍是 ${onDisk ?? '(无)'}，未切换`, { version: target });
   }
 
   const restore = params.restoreBackup === true || app.restoreBackupOnRollback === true;
   let restored: string | null = null;
-  if (restore) restored = await restoreBackup(app.root, target, app);
+  if (restore) restored = await restoreBackup(stateRoot(app.root, layoutOf(app)), target, app);
 
-  await prepareVersion(app.root, target, app.sharedPaths);
+  await prepareVersion(app.root, target, app.sharedPaths, layoutOf(app));
   let next = setCurrent(state, target);
   const old = onDisk === null ? null : findRecord(state, onDisk);
   if (old !== null) next = upsertRecord(next, { ...old, status: 'rolled_back', note: `回滚到 ${target}`.slice(0, 300) });
-  await writeState(app.root, next);
+  await writeState(stateRoot(app.root, layoutOf(app)), next);
 
   if (app.startOnActivate !== false) {
-    const started = await startApp(app.root, app.runtime.start);
+    const started = await startApp(app.root, app.runtime.start, layoutOf(app));
     if (!started.ok) throw new DeployError('START_FAILED', `${started.detail}`, { version: target });
   }
-  const health = await waitHealthy(app.root, app.health);
+  const health = await waitHealthy(app.root, app.health, layoutOf(app));
   if (!health.ok) throw new DeployError('HEALTH_FAILED', `回滚后健康检查失败：${health.detail}`, { version: target });
 
-  await appendLog(app.root, `rollback 完成：${target}（${health.detail}）`);
+  await appendLog(stateRoot(app.root, layoutOf(app)), `rollback 完成：${target}（${health.detail}）`);
   return { from: onDisk, to: target, restored, health: { ok: true, detail: health.detail } };
 }

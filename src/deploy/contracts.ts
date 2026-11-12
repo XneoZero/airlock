@@ -90,6 +90,8 @@ export const appConfigSchema = z.object({
   restoreBackupOnRollback: z.boolean().optional(),
   /** 激活时是否自动执行 start。默认 true。 */
   startOnActivate: z.boolean().optional(),
+  /** nested (default) keeps releases/current under root; flat makes root itself the site entry. */
+  layout: z.enum(['nested', 'flat']).optional(),
 }).strict();
 export type AppConfig = z.infer<typeof appConfigSchema>;
 
