@@ -198,9 +198,12 @@ node bin/airlock-deploy-ui.mjs         # 或直接跑仓库里的入口
 `scripts\provision-windows.ps1` 在 `deployer.json` 缺省时按这个位置生成配置，
 并顺手把 ACL 授给部署组——部署账号读不到别人的 profile 目录，不授权第一次发布就会失败。
 
-新机器生成的配置用 `"layout": "flat"`：**桌面上的应用夹打开就是网站文件**（`index.html` 等），
-版本目录与状态在 `桌面\.airlock\<应用id>\` 下，回滚能力不变。老配置不写 `layout` 就还是
-原来的结构（root 下带 `releases/current`）。
+新机器生成的配置用 `"layout": "mirror"`：**服务器落点就是本地发布目录的副本**，内容与目录结构
+和本地一致，不掺 `releases/`、`current`、`state.json`。版本信息留在本地 git，回退就是
+`git checkout <旧版本>` 再发一版。
+
+想换回「root 是链接 → 当前版本」的老结构，把 `layout` 改成 `flat`（root 是链接）或删掉
+（`nested`，root 下带 `releases/current`）。
 
 ### 多项目与多服务器
 

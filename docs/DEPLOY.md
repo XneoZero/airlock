@@ -257,15 +257,16 @@ copy C:\airlock\config\deployer.json C:\airlock\config\deployer.json.bak
 | `install` | 解压后、激活前跑一次（装依赖、编译），在版本目录里执行 |
 | `backupPaths` | 相对 root 的目录，激活前打包；空表示只回代码 |
 | `sharedPaths` | 相对**版本目录**的路径，激活时换成指向 `<root>/shared/<路径>` 的链接，运行时数据靠它跨版本保留 |
-| `layout` | `nested`（默认，root 下带 `releases/`、`current`）或 `flat`（root 本身就是站点入口） |
+| `layout` | `mirror`（新机器默认：root 是发布源副本，不留历史）、`nested`（旧默认：root 下带 `releases/`、`current`）或 `flat`（root 是链接，指向当前版本） |
 | `keepReleases` | 保留多少个版本目录，默认 5；当前在用的永远不删 |
 | `restoreBackupOnRollback` | 回滚时是否默认恢复数据，默认 `false` |
 
 命令对象里的 `cwd` 只能是 `current` 或 `root`，不接受任意路径——否则路径注入面又打开了。
 
-### `mirror` 布局：服务器上就是本地目录的副本
+### `mirror` 布局（新机器默认）：服务器上就是本地目录的副本
 
-如果你的版本管理交给 git，不需要服务器保留历史，用 `"layout": "mirror"`：
+版本管理交给 git 时，服务器不需要保留历史，用 `"layout": "mirror"`——
+`provision-windows.ps1` 给新机器生成的就是它：
 
 - 落点目录的内容和目录结构**与发布源一致**，不会多出 `releases/`、`current`、`state.json`；
 - 发布 = 把包内容镜像过去（先逐个文件原子覆盖，再删掉源里没有的），
@@ -303,7 +304,8 @@ C:\Users\Administrator\Desktop\.airlock\qingmang\
 - `sharedPaths` 的 `shared/` 也跟着挪到 `.airlock/<应用id>/shared/`；
 - `runtime` 里 `cwd: "current"` 在 flat 下等价于 root，启停脚本不用改。
 
-`provision-windows.ps1` 给新机器生成的配置默认就是 `flat`。
+`provision-windows.ps1` 的 `-Layout` 可显式指定 `nested` / `flat` / `mirror`；
+新机器默认 `mirror`（v0.5.1 起，之前默认 `flat`）。
 
 ### 有状态应用：`sharedPaths` 让数据跨版本活下来
 

@@ -37,6 +37,11 @@
   Deploy root for that app. Default: <administrator desktop>\<AppId>,
   i.e. C:\Users\Administrator\Desktop\<app> — the place an operator sees first.
 
+.PARAMETER Layout
+  How the app root is laid out: nested | flat | mirror. Default: mirror.
+  mirror means the root is a plain copy of the published source (no releases/,
+  no current link); version history and rollback live in git.
+
 .PARAMETER HealthPort
   Loopback port for the generated health check. Default: 18080.
 
@@ -62,7 +67,7 @@ param(
     [string]$NodePath = '',
     [string]$AppId = 'app',
     [string]$AppRoot = '',
-    [ValidateSet('nested','flat','mirror')][string]$Layout = 'flat',
+    [ValidateSet('nested','flat','mirror')][string]$Layout = 'mirror',
     [int]$HealthPort = 18080,
     [string]$EntryFile = 'server.mjs',
     [switch]$SkipSshd,
@@ -222,10 +227,9 @@ if ($DryRun) {
         apps = [ordered]@{
             $AppId = [ordered]@{
                 root = $AppRoot
-                # flat：root 本身就是站点入口，桌面打开应用夹看到的就是网站文件；
-                # 版本与状态在 <root 父目录>\.airlock\<app> 下。
+                # mirror（默认）：落点就是发布源的副本，不带 releases/、current、state.json；
+                # 版本与状态在 <root 父目录>\.airlock\<app> 下，回退靠 git checkout 再发一版。
                 layout = $Layout
-                keepReleases = 5
                 runtime = [ordered]@{
                     start = [ordered]@{
                         command = (Join-Path $env:SystemRoot 'System32\cmd.exe')
@@ -249,6 +253,9 @@ if ($DryRun) {
             }
         }
     }
+    # mirror 不在服务器保留历史版本，keepReleases 对它没有意义，不写进配置。
+    if ($Layout -ne 'mirror') { $config.apps[$AppId].keepReleases = 5 }
+
     [System.IO.File]::WriteAllText($appConfigPath, ($config | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
 
     $startBody = @"

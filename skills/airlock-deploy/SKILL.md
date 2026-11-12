@@ -108,6 +108,8 @@ airlock-deploy mcp                            # 给 MCP 客户端的 stdio 服�
 3. **拒绝盘根与系统目录**（`C:\`、`C:\Windows`、`/etc`、`/usr`）。
 
 改之前先备份服务器配置。Windows 上默认落点是管理员桌面 `C:\Users\Administrator\Desktop`。
+新机器默认 `layout: "mirror"`：服务器落点就是发布源副本，版本历史留在本地 git，
+回退是 `git checkout <旧版本>` 再发一版；mirror 下 `rollback` 会被明确拒绝，别反复试。
 
 ⚠️ **改落点后要检查启动脚本**：被 Task Scheduler 直接调用的脚本（如 `mc-launch.cmd`）在
 `bin\` 下，拿不到 `cwd`，只能把 root 写死。不改它的话服务会从**旧目录**被拉起来——
