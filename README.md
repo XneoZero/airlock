@@ -273,6 +273,17 @@ mkdir -p ~/.dsh/skills/airlock-deploy
 cp skills/airlock-deploy/SKILL.md ~/.dsh/skills/airlock-deploy/
 ```
 
+**在每个使用 airlock 的项目里也要落一份**，否则那个项目的 agent 读不到规范——
+技能文件躺在 `node_modules/airlock/skills/` 下，不在 agent 的扫描路径里：
+
+```bash
+airlock-deploy skill install --profile web-prod    # 写 <项目>/.dsh/skills/airlock-deploy/SKILL.md
+```
+
+生成的文件 = 通用规范 + 自动填好的「本项目」小节（profile、服务器、app、落点、布局、
+`sharedPaths` / `preservePaths`）。首行带 `<!-- airlock:generated -->` 标记，重复执行会刷新；
+遇到手写的同名文件不覆盖，除非加 `--force`。`release` 发现项目还没落规范时会提示一行。
+
 技能里刻意不写死任何路径和 IP，改用「先查再答」：`status` 返回的 `root`、`where airlock-deploy`、
 档案的实际来源。这样换机器、换账号都不用改技能。
 

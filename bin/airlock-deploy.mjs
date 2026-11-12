@@ -10,11 +10,13 @@
  * 用法：node bin/airlock-deploy.mjs <命令> [--app 名字] [--profile 档案] [参数]
  */
 import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { createDeployClient } from '../src/deploy/client.ts';
 import { loadProfile, packRelease } from '../src/deploy/local.ts';
+import { installProjectSkill, renderProjectSkill } from '../src/deploy/skill.ts';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const USAGE = `用法：node bin/airlock-deploy.mjs <命令> [--app 名字] [--profile 档案] [--server 名字] [参数]
@@ -25,6 +27,7 @@ const USAGE = `用法：node bin/airlock-deploy.mjs <命令> [--app 名字] [--p
   rollback --app 名字 [--to 版本] [--restore-backup]
   logs     --app 名字 [--lines 50]
   ui       --app 名字 [--port 7788] [--no-open]   本地 Web 控制台
+  skill    install [--dir 项目目录] [--force]     在本项目落地一份规范（agent 能直接读到）
   mcp                                    给 MCP 客户端的 stdio 服务器
 档案：--profile 名字 / AIRLOCK_DEPLOY_PROFILE
       表：--profiles <文件> / AIRLOCK_DEPLOY_PROFILES_FILE（全局放一份，所有项目共用）
@@ -38,16 +41,17 @@ function fail(message, hint) {
   process.exit(1);
 }
 
-const takesValue = new Set(['--app', '--profile', '--profiles', '--server', '--source', '--version', '--exclude', '--commit', '--to', '--lines', '--timeout']);
+const takesValue = new Set(['--app', '--profile', '--profiles', '--server', '--source', '--version', '--exclude', '--commit', '--to', '--lines', '--timeout', '--dir']);
 
 function parseArgs(argv) {
-  const options = { profile: process.env.AIRLOCK_DEPLOY_PROFILE ?? '', timeoutMs: undefined, probe: false, restoreBackup: false };
+  const options = { profile: process.env.AIRLOCK_DEPLOY_PROFILE ?? '', timeoutMs: undefined, probe: false, restoreBackup: false, force: false };
   const positional = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') { options.help = true; continue; }
     if (arg === '--probe') { options.probe = true; continue; }
     if (arg === '--restore-backup') { options.restoreBackup = true; continue; }
+    if (arg === '--force') { options.force = true; continue; }
     if (takesValue.has(arg)) {
       const value = argv[index + 1];
       if (value === undefined) fail(`${arg} 需要一个值`);
@@ -74,6 +78,54 @@ if (command === 'mcp') {
     env: { ...process.env, ...(options.profile === '' ? {} : { AIRLOCK_DEPLOY_PROFILE: options.profile }) },
   });
   child.on('exit', code => process.exit(code ?? 0));
+} else if (command === 'skill') {
+  // 规范落在项目的 .dsh/skills/ 下：airlock 自带的 SKILL.md 在 node_modules 里，
+  // agent 的 skill 扫描路径看不到它——「随包分发」不等于「能读到」。
+  if (positional[1] !== 'install') fail('用法：airlock-deploy skill install [--dir 项目目录] [--force]');
+  const projectDir = resolve(options.dir ?? process.cwd());
+  const packageRoot = resolve(SCRIPT_DIR, '..');
+  const generic = readFileSync(join(packageRoot, 'skills', 'airlock-deploy', 'SKILL.md'), 'utf8');
+  const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+  const facts = { version: pkg.version };
+  try {
+    const loaded = loadProfile(
+      options.profile === '' ? undefined : options.profile,
+      options.profiles,
+      options.server,
+    );
+    facts.profile = loaded.name;
+    facts.app = options.app ?? loaded.profile.app;
+    facts.server = options.server ?? loaded.profile.serverId ?? loaded.profile.host;
+    facts.workspace = loaded.profile.workspace ?? loaded.baseDir;
+    const client = createDeployClient({ profile: loaded.profile });
+    const status = await client.call({
+      op: 'status',
+      ...(facts.app === undefined ? {} : { app: facts.app }),
+    });
+    const one = Array.isArray(status?.apps)
+      ? status.apps.find(item => item.app === facts.app) ?? status.apps[0]
+      : status;
+    if (one !== null && typeof one === 'object') {
+      facts.app = facts.app ?? one.app;
+      facts.root = one.root;
+      facts.layout = one.layout ?? null;
+      facts.sharedPaths = one.sharedPaths ?? [];
+      facts.preservePaths = one.preservePaths ?? [];
+    }
+  } catch (error) {
+    // 连不上服务器也照写：规范里的通道纪律与失败模式本机就能用，缺的只是落点那几行。
+    facts.note = error instanceof Error ? error.message : String(error);
+  }
+  const installed = await installProjectSkill({
+    projectDir,
+    content: renderProjectSkill(generic, facts),
+    force: options.force === true,
+  });
+  process.stdout.write(`${JSON.stringify(installed, null, 2)}\n`);
+  if (installed.status === 'refused') {
+    process.stderr.write('[deploy] 该项目已有不是本命令生成的 SKILL.md，未覆盖；确认要覆盖就加 --force\n');
+    process.exitCode = 1;
+  }
 } else if (command === 'ui') {
   // 控制台单独起进程：它要常驻并监听端口，和一次性 CLI 的生命周期不同。
   const env = { ...process.env };
@@ -103,6 +155,7 @@ if (command === 'mcp') {
 
   try {
     let result;
+    let releaseProjectDir = process.cwd();
     switch (command) {
       case 'status':
         result = await client.call({
@@ -139,6 +192,7 @@ if (command === 'mcp') {
         const sourceDir = options.source === undefined
           ? resolve(loaded.baseDir, loaded.profile.workspace ?? '.')
           : resolve(options.source);
+        releaseProjectDir = sourceDir;
         const packed = await packRelease({
           sourceDir,
           ...(options.version === undefined ? {} : { version: options.version }),
@@ -169,6 +223,10 @@ if (command === 'mcp') {
         fail(`未知命令：${command}`, '用 --help 查看命令列表');
     }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    // 第一次在某个项目发布时提醒落规范：skill 在包里、项目里没有，agent 读不到。
+    if (command === 'release' && !existsSync(join(releaseProjectDir, '.dsh', 'skills', 'airlock-deploy', 'SKILL.md'))) {
+      process.stderr.write('[deploy] 本项目还没有落地 airlock 规范：运行 `airlock-deploy skill install` 生成\n');
+    }
   } catch (error) {
     const code = error !== null && typeof error === 'object' && 'code' in error ? String(error.code) : 'ERROR';
     const message = error instanceof Error ? error.message : String(error);

@@ -122,16 +122,26 @@ mirror 下 root 里出现 `releases/`、`current`、`state.json` 说明配置并
 ## 首次在项目里使用：落一份项目 skill
 
 airlock 只管分发。某个项目要保护哪些数据、版本号怎么排、服务怎么起，都是项目自己的事。
-所以第一次用它在某个项目发布时，**在该项目留一份项目级 skill**（`<项目>/.dsh/skills/airlock-deploy/SKILL.md`，
-或项目已有的 agent 说明文件），至少写清：
+所以第一次在某个项目发版前，**先在该项目落一份规范**：
 
-- 本项目的 profile 名、服务器名、app 名、本地工作区
+```powershell
+airlock-deploy skill install --profile <档案名>      # 缺省用当前目录
+```
+
+它会把本文件复制到 `<项目>/.dsh/skills/airlock-deploy/SKILL.md`，并在末尾生成「本项目」小节：
+profile / 服务器 / app / 本地工作区 / 服务器落点 / 布局 / `sharedPaths` / `preservePaths`
+（能连上部署器时自动填，连不上会写明原因）。首行带 `<!-- airlock:generated -->` 标记，
+重复执行会刷新通用部分；遇到没有标记的同名文件会拒绝覆盖，确认要覆盖加 `--force`。
+
+为什么必须落一份：本文件随包装在 `node_modules/airlock/skills/` 下，而 agent 的 skill 扫描路径是
+`<项目>/.dsh/skills/`，不复制过去等于没分发。`release` 发现项目还没落规范时会在 stderr 提醒一行。
+
+生成后按项目实际情况补这几项：
+
 - 版本号规则（例如 `YYYYMMDD-HHMM`）与「先 commit 再发版」的约定
-- 服务器落点、启动命令、健康检查 URL
-- 数据保护：哪些路径配 `sharedPaths`、哪些配 `preservePaths`
+- 启动命令、健康检查 URL（部署器里的 `runtime` / `health`）
+- 数据保护：哪些路径配 `sharedPaths`（改目录结构）、哪些配 `preservePaths`（不改）
 - 发版后的验收命令（`status --probe`、一次真实请求、回滚演练）
-
-项目 skill 只写项目差异，通用流程引用本文件，不要把整份复制过去，否则 airlock 升级后两份会漂移。
 
 ## 改服务器上的落点
 
